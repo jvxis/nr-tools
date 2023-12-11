@@ -47,11 +47,34 @@ This script checks the LND database size and restarts the lND and other services
 4. Setup with the size that you usually restart LND on line 7 `threshold_size="12000000000"`
 5. Replace lines 41 and 48, where is /path_to_umbrel with path for your Umbrel Directory
 6. Save the Script - CTRL + O
-6. Leave the editor - CTRL + X
-7. Make the script an executable: `sudo chmod +x check_channelsdb_size.sh`
-8. Setup CRON to run the script every 1 hour - `sudo crontab -e`
-9. Add the line: `0 * * * * /bin/bash /home/<USER>/nr-tools/check_channelsdb_size.sh`
-10. CTRL + O to save and CTRL + X to leave editor
+7. Leave the editor - CTRL + X
+8. Make the script an executable: `sudo chmod +x check_channelsdb_size.sh`
+9. Setup CRON to run the script every 1 hour - `sudo crontab -e`
+10. Add the line: `0 * * * * /bin/bash /home/<USER>/nr-tools/check_channelsdb_size.sh`
+11. CTRL + O to save and CTRL + X to leave editor
 
 **Done!**
+
+## service_on_off.py
+This is a telegram bot to start, stop and restart Umbrel services. You can use /on name_of_service to start some services
+
+**How to Setup:**
+1. open the code: `cd nr-tools` and `nano service_on_off.py`
+2. Include your Bot Token to receive telegram messages
+3. Replace /path_to_umbrel with your path to Umbrel directory`SCRIPT_PATH = "/path_to_umbrel/scripts/app"`
+4. Save the Script - CTRL + O
+5. Leave the editor - CTRL + X
+6. Install Dependencies: `pip3 install pyTelegramBotAPI`
+7. Run the code: python3 service_on_off.py
+
+You can also run it with a screen command to keep it executing in background: `screen -S service-on-off python3 service_on_off.py`
+
+**Usage:**
+On your telegram app inside the BOT, you can type:
+- /on lightning - to turn on lnd
+- /off lightning - to turn off lnd
+- /boot lighting - to restart lnd
+The same can be done with any Umbrel Services. Like, bitcoin, lightning-terminal etc.
+
+
 
