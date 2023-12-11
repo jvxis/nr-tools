@@ -7,21 +7,23 @@
 #
 # Credits to @feelancer21 & @M1ch43lV for putting this together
 #
-# usage: */30 * * * * /bin/bash /home/lnd/htlcScan.sh
+# usage: */30 * * * * /bin/bash /home/nr-tools/htlcScan.sh
 #
 # version: 1.5
 
 # setup telegram bot
-TOKEN="6620180456:AAHkM-CrOhYy_imkMe-ot5syHkz_zn3VIBo"
-CHATID="-4012983440"
-NODE="Friendspool⚡🍻"
+TOKEN="BOT_TOKEN"
+CHATID="CHAT_ID"
+NODE="NODE NAME"
 
 # define lncli command - (un)comment which applies
+
 # bolt/blitz installation
 #[ -f ~/.bashrc ] && source ~/.bashrc
 #[ -z "$_CMD_LNCLI" ] && _CMD_LNCLI=/usr/local/bin/lncli
-# umbrel
-_CMD_LNCLI="/media/jvx/Umbrel-JV1/scripts/app compose lightning exec -T lnd lncli"
+
+# umbrel - Replace /path_to_umbrel with your full path to Umbrel directory
+_CMD_LNCLI="/path_to_umbrel/scripts/app compose lightning exec -T lnd lncli"
 
 # push message to TG bot
 pushover() {
