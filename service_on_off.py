@@ -51,6 +51,22 @@ def turn_off(message):
             bot.send_message(chat_id, f'❌ Failed to turn off {service_name}.')
     else:
         bot.send_message(chat_id, 'Usage: /off <SERVICE_NAME>')
+        
+@bot.message_handler(commands=['boot'])
+def turn_off(message):
+    chat_id = message.chat.id
+    command = message.text.split(' ', 1)
+    
+    if len(command) == 2:
+        service_name = command[1]
+        bot.send_message(chat_id, f'Restarting {service_name}...')
+        try:
+            subprocess.run([SCRIPT_PATH, 'restart', service_name], check=True)
+            bot.send_message(chat_id, f'🔄 Service {service_name} has been restarted.')
+        except subprocess.CalledProcessError:
+            bot.send_message(chat_id, f'❌ Failed to restart {service_name}.')
+    else:
+        bot.send_message(chat_id, 'Usage: /boot <SERVICE_NAME>')       
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)
