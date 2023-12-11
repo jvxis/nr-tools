@@ -65,7 +65,7 @@ This is a telegram bot to start, stop and restart Umbrel services. You can use /
 4. Save the Script - CTRL + O
 5. Leave the editor - CTRL + X
 6. Install Dependencies: `pip3 install pyTelegramBotAPI`
-7. Run the code: python3 service_on_off.py
+7. Run the code: `python3 service_on_off.py`
 
 You can also run it with a screen command to keep it executing in background: `screen -S service-on-off python3 service_on_off.py`
 
@@ -76,5 +76,25 @@ On your telegram app inside the BOT, you can type:
 - /boot lighting - to restart lnd
 The same can be done with any Umbrel Services. Like, bitcoin, lightning-terminal etc.
 
+**Done!**
 
+## sats4plus.py
+This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info
+
+**Pre-reqs**
+1. You need to set up an account on https://sparkeer.space
+2. Then you need to get the API-KEY
+3. Click on Node and then Account and click on the button GENERATE APY KEY
+![image](https://github.com/jvxis/nr-tools/assets/108929149/6b320d56-7e6a-41f6-a3ca-d404635fe9fa)
+4. Open the code: `cd nr-tools` and `nano sats4plus.py`
+5. Replace the line 12 with your API KEY: `API_KEY = "SPARKEER_API_KEY"`
+6. On line 55 replace /path_to_umbrel with the path to your Umbrel directory: `["/path_to_umbrel/scripts/app", "compose", "lightning", "exec", "lnd", "lncli", "querymc"],`
+7. Save the Script - CTRL + O
+5. Leave the editor - CTRL + X
+6. Install Dependencies: `pip3 install requests`
+7. Run the code: `python3 sats4plus.py`
+
+Recommended to execute this code as a Linux Service or with screen: `screen -S sats4 python3 sats4plus.py`
+
+**Done!**
 
