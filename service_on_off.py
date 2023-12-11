@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+#This is a telegram bot to start and stop Umbrel services. You can use /on name_of_service to start some services.
+#Ex: /on lightning-terminal (this will execute the LIT)
+
 #Dependencies
-#pip3 install pyTelegramBotAPI
+#You need to install the telegram library using the command: pip3 install pyTelegramBotAPI
 
 import telebot
 import subprocess
