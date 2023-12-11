@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+#Dependencies
+#pip3 install pyTelegramBotAPI
+
 import telebot
 import subprocess
 
