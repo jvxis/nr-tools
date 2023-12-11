@@ -38,7 +38,7 @@ if [ -e "$file_path" ]; then
         echo "Channel DB is $file_size. Restart LND  needed"  # Send message if size is greater than 12 GB
         pushover "⚠️  Channel DB is $file_size. Restarting LND..."
         sleep 60 # Wait 1 min to restart LND
-        /bin/bash /path_to_umbrel/scripts/app restart lightning #remove comment to reboot
+        /bin/bash /path_to_umbrel/scripts/app restart lightning #if you just want to reboot, only replace the line to reboot
         sleep 600
         echo "LND Restarted"
         pushover "✅ LND Restarted."
