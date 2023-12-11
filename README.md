@@ -1,5 +1,6 @@
 # nr-tools
 Essential and Life-Saver Tools for Node Runners.
+
 All these tools are helping me a lot with my Lightning Node [Friendspool⚡🍻](http://amboss.space/c/friendspool)
 ![image](https://github.com/jvxis/nr-tools/assets/108929149/c11e6d29-72ab-44ef-a9cb-bb8af8c5365a)
 
@@ -18,6 +19,7 @@ Look for the "chat" object within the response. The "id" field in that object is
 
 ## htlcScan.sh
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
+
 **How to Setup:**
 1. open the code: nano htlcScan.sh
 2. Include your Bot Token and Chat ID to receive telegram messages
@@ -29,6 +31,7 @@ This script checks for pending stuck htlcs that are near expiration height (< 13
 8. Setup CRON to run the script every 30 minutes - `sudo crontab -e`
 9. Add the line: `*/30 * * * * /bin/bash /home/nr-tools/htlcScan.sh`
 10. CTRL + O to save and CTRL + X to leave editor
+
 **Done!**
 
 
