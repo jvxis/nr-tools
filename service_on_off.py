@@ -3,9 +3,9 @@ import telebot
 import subprocess
 
 #replace with your bot token
-TELEGRAM_TOKEN = "6620180456:AAHkM-CrOhYy_imkMe-ot5syHkz_zn3VIBo"
+TELEGRAM_TOKEN = "BOT_TOKEN"
 #replace with your path to app
-SCRIPT_PATH = "/media/jvx/Umbrel-JV1/scripts/app"
+SCRIPT_PATH = "/path_to_umbrel/scripts/app"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 print("Umbrel Service on-off started")
