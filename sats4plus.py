@@ -3,7 +3,11 @@ import requests
 from datetime import datetime, timedelta
 import time
 
-API_KEY = "MeVXZZRtAxQXHOvy2oUhBypStskln8yfLmSPnDl3lpaKllBTU6USM8DEHHxhYADd"
+#Dependencies
+
+
+#Replace with your API_KEY - you can get it on https://sparkseer.space/account
+API_KEY = "SPARKEER_API_KEY"
 PAYMENTS_API_URL = "https://api.sparkseer.space/v1/sats4stats/payouts"
 
 def get_last_payment_time():
@@ -44,8 +48,9 @@ while True:
             print(f"Current date and time: {current_datetime}")
 
             # Execute the command and print the output
+            # Replace path_to_umbrel with the path to your Umbrel diretory
             command_output = subprocess.run(
-                ["/media/jvx/Umbrel-JV1/scripts/app", "compose", "lightning", "exec", "lnd", "lncli", "querymc"],
+                ["/path_to_umbrel/scripts/app", "compose", "lightning", "exec", "lnd", "lncli", "querymc"],
                 capture_output=True,
                 text=True
             )
