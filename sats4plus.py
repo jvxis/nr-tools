@@ -1,3 +1,5 @@
+#This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info.
+
 import subprocess
 import requests
 from datetime import datetime, timedelta
