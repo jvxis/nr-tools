@@ -1,12 +1,16 @@
 #!/bin/bash
 
-file_path="/media/jvx/Umbrel-JV1/app-data/lightning/data/lnd/data/graph/mainnet/channel.db"
+# Replace /path_to_umbrel with the path for your Umbrel Directory
+file_path="/path_to_umbrel/app-data/lightning/data/lnd/data/graph/mainnet/channel.db"
+
+# Setup with the size that you usually restart LND
 threshold_size="12000000000"  # 12 GB in bytes
 
 #Setup Telegram bot
-TOKEN="6620180456:AAHkM-CrOhYy_imkMe-ot5syHkz_zn3VIBo"
-CHATID="-4012983440"
-NODE="Friendspool⚡🍻"
+TOKEN="BOT_TOKEN"
+CHATID="CHAT_ID"
+#Replace with your Node Name
+NODE="NODE_NAME"
 
 
 # push message to TG bot
@@ -34,14 +38,14 @@ if [ -e "$file_path" ]; then
         echo "Channel DB is $file_size. Restart LND  needed"  # Send message if size is greater than 12 GB
         pushover "⚠️  Channel DB is $file_size. Restarting LND..."
         sleep 60 # Wait 1 min to restart LND
-        /bin/bash /media/jvx/Umbrel-JV1/scripts/app restart lightning #remove comment to reboot
+        /bin/bash /path_to_umbrel/scripts/app restart lightning #remove comment to reboot
         sleep 600
         echo "LND Restarted"
         pushover "✅ LND Restarted."
         sleep 900
         echo "Restarting LIT service"
         pushover "Restarting LIT Service..."
-        /bin/bash /media/jvx/Umbrel-JV1/scripts/app restart lightning-terminal
+        /bin/bash /path_to_umbrel/scripts/app restart lightning-terminal
         sleep 30
         echo "LIT Restarted"
         pushover "✅ LIT Restarted."
