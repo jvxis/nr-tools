@@ -17,17 +17,20 @@ bash
 `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
 Look for the "chat" object within the response. The "id" field in that object is your chat ID.
 
+**Repository Installation:**
+1. Git Clone the Repository: `git clone https://github.com/jvxis/nr-tools.git
+
 ## htlcScan.sh
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
 
 **How to Setup:**
-1. open the code: nano htlcScan.sh
+1. open the code: `cd nr-tools` and `nano htlcScan.sh`
 2. Include your Bot Token and Chat ID to receive telegram messages
 3. Replace the line 26 `_CMD_LNCLI="/path_to_umbrel/scripts/app compose lightning exec -T lnd lncli"` with your Umbrel diretory Path
 4. Optionally set up the `blocks_til_expiry=13` on line 75 to a higher number
 5. Save the Script - CTRL + O
 6. Leave the editor - CTRL + X
-7. Make the script an executable: `chmod +x htlcScan.sh`
+7. Make the script an executable: `sudo chmod +x htlcScan.sh`
 8. Setup CRON to run the script every 30 minutes - `sudo crontab -e`
 9. Add the line: `*/30 * * * * /bin/bash /home/nr-tools/htlcScan.sh`
 10. CTRL + O to save and CTRL + X to leave editor
