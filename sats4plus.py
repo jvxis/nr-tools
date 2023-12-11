@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import time
 
 #Dependencies
-
+#You need to create an account for your node on https://sparkeer.space
 
 #Replace with your API_KEY - you can get it on https://sparkseer.space/account
 API_KEY = "SPARKEER_API_KEY"
