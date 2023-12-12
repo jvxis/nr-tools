@@ -109,4 +109,6 @@ You need Box of Satoshis (BOS) installed
    
 ![image](https://github.com/jvxis/nr-tools/assets/108929149/cae392b6-94a7-4663-a0d5-d2179f48f226)
 
+**Check out the Telegram Bot Version** `onchain-fee-calc-bot.py` You only need to replace it with your Bot Token.
+
 **Done!**
