@@ -1,3 +1,4 @@
+#Credit to @EMTLL_
 import subprocess
 import telebot
 
