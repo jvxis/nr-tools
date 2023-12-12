@@ -98,3 +98,12 @@ Recommended to execute this code as a Linux Service or with screen: `screen -S s
 
 **Done!**
 
+## onchain-fee-calc.py
+This code calculates how much on fees you will spend to send an on-chain transaction, considering your available UTXOs
+
+**Pre-reqs**
+You need Box of Satoshis (BOS) installed
+
+**Usage:**
+1. Just run `python3 onchain-fee-calc.py
+![image](https://github.com/jvxis/nr-tools/assets/108929149/cae392b6-94a7-4663-a0d5-d2179f48f226)
