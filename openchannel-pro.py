@@ -64,6 +64,6 @@ if utxos_needed >= 0:
     print(f"\nSão necessárias {utxos_needed} UTXOs para transferir {formatted_input_amount} satoshis.")
     print(f"A fee on-chain necessária para a transação é: {formatted_onchain_fee_cost} satoshis")
     print(f"All outpoints related to the utxos considered: {all_outpoints}")
-    print(f"\nComando de abertura do canal:\n /path/to/umbrel/scripts/app compose lightning exec lnd lncli openchannel --node_key <node_public_key> --sat_per_vbyte={int(fee_per_vbyte)} --utxo={','.jo>
+<','.join(map(str, all_outpoints))}  --local_amt {int(input_amount)}")
 else:
     print("Não há UTXOs suficientes.")
