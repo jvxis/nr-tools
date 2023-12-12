@@ -2,7 +2,8 @@ import subprocess
 import telebot
 
 # Your Telegram bot token
-TELEGRAM_BOT_TOKEN = "6642020497:AAEMKFL4O0qSpWvxML9q0cQlKbytyb4AFV0"
+# Attention - If you use this same bot token for other python Bot, please consider creating a new one to avoid conflict.
+TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot onchain fee calc started")
