@@ -2,7 +2,7 @@
 #Generates a BOS Fund command to consolidate your UTXOS
 #ATTENTION - You need to generate a NEW On-chain Address in your WALLET
 
-#Dependencies Box of Satoshis (BOS)
+#Dependencies Balance of Satoshis (BOS)
 
 import subprocess
 
