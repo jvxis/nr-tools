@@ -4,10 +4,8 @@ import subprocess
 import csv
 from datetime import datetime
 
-# Replace with your node Name
-NODE_NAME = "Your-Node-Name"
+NODE_NAME = "Your-node-name"
 
-# Replace it with your full path to BOS Binary
 FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
 
 def execute_command(command):
@@ -61,6 +59,10 @@ if __name__ == "__main__":
     print(f'Forwards Income: {total_forwards_income:.2f} SATS')
     print(f'Rebalance Costs: {total_rebalance_costs:.2f} SATS')
     print(f'Daily Profit: {total_forwards_income + total_rebalance_costs:.2f} SATS')
+
+    # Process and print invoice data
+    process_invoice_csv(invoices_output)
+
 
     # Process and print invoice data
     process_invoice_csv(invoices_output)
