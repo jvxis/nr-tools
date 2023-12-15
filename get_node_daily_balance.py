@@ -1,5 +1,5 @@
 # This code gets your daily node balance
-# Dependencies: Box of Satoshis (BOS)
+# Dependencies: Balance of Satoshis (BOS)
 # Use with crontab
 # 0 0 * * * /usr/bin/python3 /home/<user>/get_node_daily_balance.py >> /home/<user>/node-balance.log 2>&1
 
