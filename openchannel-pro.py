@@ -1,4 +1,4 @@
-#Dependencies: Box of Satoshis
+#Dependencies: Balance of Satoshis
 import subprocess
 
 #Replace with your full path to Umbrel directory.
