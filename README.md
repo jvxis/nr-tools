@@ -126,4 +126,41 @@ You need Box of Satoshis (BOS) installed
 
 **Done!**
 
+## openchannel-pro.py
+This code, generates a channel open command considering only your unspent UTXOs needed. It helps to save sats during this process. So you can open your channels like a PRO!
 
+**How to Setup:**
+1. open the code: `cd nr-tools` and `openchannel-pro.py`
+2. Replace path_to_umbrel with your path to Umbrel directory`path_to_umbrel = "Your_Path_TO_Umbrel"`
+3. Save the Script - CTRL + O
+4. Leave the editor - CTRL + X
+
+**Usage:**
+1. Just run `python3 openchannel-pro.py`
+
+** This program only generates the command, so you should first check it, copy, paste and then RUN.
+
+**Done!**
+
+## get_node_daily_balance.py
+This code runs with your crontab every day and saves your node balance, considering Forwards and Rebalances
+
+**Pre-reqs**
+You need Box of Satoshis (BOS) installed
+
+**How to Setup:**
+1. open the code: `cd nr-tools` and `get_node_daily_balance.py`
+2. Replace `NODE_NAME = "Your-node-name"` with your Node Alias
+3. Replace `FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"`This is very important to set up right to run with Crontab
+4. Save the Script - CTRL + O
+5. Leave the editor - CTRL + X
+6. open crontab with the command `crontab -e`
+7. Add a line: `0 0 * * * /usr/bin/python3 /home/<user>/get_node_daily_balance.py >> /home/<user>/node-balance.log 2>&1` Please check if it is the right path in your system.
+8. Save the Script - CTRL + O
+9. Leave the editor - CTRL + X
+
+** This code will save your node daily balance in the file `/home/<user>/node-balance.log`
+
+** If you want to run adhoc for a specific date and month please run the code [get_node_balance.py](https://github.com/jvxis/nr-tools/blob/main/get_node_balance.py)
+
+**Done!**
