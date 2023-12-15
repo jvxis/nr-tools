@@ -102,7 +102,7 @@ Recommended to execute this code as a Linux Service or with screen: `screen -S s
 This code calculates how much on fees you will spend to send an on-chain transaction, considering your available UTXOs
 
 **Pre-reqs**
-You need Box of Satoshis (BOS) installed
+You need Balance of Satoshis (BOS) installed
 
 **Usage:**
 1. Just run `python3 onchain-fee-calc.py`
@@ -117,7 +117,7 @@ You need Box of Satoshis (BOS) installed
 Generates a BOS Fund command to consolidate your unspent UTXOS.
 
 **Pre-reqs**
-You need Box of Satoshis (BOS) installed
+You need Balance of Satoshis (BOS) installed
 
 **Usage:**
 1. Just run `python3 utxo-consolidator.py`
@@ -146,7 +146,7 @@ This code, generates a channel open command considering only your unspent UTXOs 
 This code runs with your crontab every day and saves your node balance, considering Forwards and Rebalances
 
 **Pre-reqs**
-You need Box of Satoshis (BOS) installed
+You need Balance of Satoshis (BOS) installed
 
 **How to Setup:**
 1. open the code: `cd nr-tools` and `get_node_daily_balance.py`
