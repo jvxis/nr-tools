@@ -1,10 +1,14 @@
+# Include User input of a Month and Day of the current year
+
 import subprocess
 import csv
 from datetime import datetime
 
-NODE_NAME = "Friendspool⚡🍻"
+# Replace with your node Name
+NODE_NAME = "Your-Node-Name"
 
-FULL_PATH_BOS = "/root/.npm-global/lib/node_modules/balanceofsatoshis/"
+# Replace it with your full path to BOS Binary
+FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
 
 def execute_command(command):
     # Execute the command and capture the output
