@@ -105,10 +105,25 @@ This code calculates how much on fees you will spend to send an on-chain transac
 You need Box of Satoshis (BOS) installed
 
 **Usage:**
-1. Just run `python3 onchain-fee-calc.py
+1. Just run `python3 onchain-fee-calc.py`
    
 ![image](https://github.com/jvxis/nr-tools/assets/108929149/cae392b6-94a7-4663-a0d5-d2179f48f226)
 
 **Check out the Telegram Bot Version** `onchain-fee-calc-bot.py` You only need to replace it with your Bot Token.
 
 **Done!**
+
+## utxo-consolidator.py
+Generates a BOS Fund command to consolidate your unspent UTXOS.
+
+**Pre-reqs**
+You need Box of Satoshis (BOS) installed
+
+**Usage:**
+1. Just run `python3 utxo-consolidator.py`
+
+** This program only generates the command, so you should first check it, copy, paste and then RUN.
+
+**Done!**
+
+
