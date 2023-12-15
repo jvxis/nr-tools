@@ -1,10 +1,17 @@
+# This code gets your daily node balance
+# Dependencies: Box of Satoshis (BOS)
+# Use with crontab
+# 58 23 * * * /usr/bin/python3 /home/<user>/get_node_daily_balance.py >> /root/node-balance.log 2>&1
+
+
 import subprocess
 import csv
 from datetime import datetime
 
-NODE_NAME = "Friendspool⚡🍻"
+NODE_NAME = "Your-node-name"
 
-FULL_PATH_BOS = "/root/.npm-global/lib/node_modules/balanceofsatoshis/"
+# Please check if it is the right path for your BOS Binary
+FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
 
 def execute_command(command):
     # Execute the command and capture the output
