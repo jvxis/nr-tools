@@ -1,7 +1,7 @@
 # onchain-fee-calc.py
 # This code calcs how much on fees you will spend to send a onchain transaction.
 # Credit to @EMTLL_
-# Dependencies: Box of Satoshis (BOS)
+# Dependencies: Balance of Satoshis (BOS)
 
 import subprocess
 
