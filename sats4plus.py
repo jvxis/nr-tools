@@ -33,7 +33,7 @@ def get_last_payment_time():
             return latest_payout_time
         else:
             # Assuming is the first time
-            return datetime.now()
+            return (datetime.now() - timedelta(hours=24))
     except ValueError:
         print("Error: Unable to parse payouts API response as JSON")
     return None
