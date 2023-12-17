@@ -78,7 +78,7 @@ if __name__ == "__main__":
     total_forwards_income = process_csv(forwards_output)
 
     # Print the results with user-provided month and day
-    print(f'\nNode: {NODE_NAME} - Date: {month}/{day}')
+    print(f'\nNode: {NODE_NAME} - Date: {current_date.strftime("%Y-%m-%d %H:%M:%S")}')
     print(f'Forwards Income: {total_forwards_income:.2f} SATS')
     print(f'Rebalance Costs: {total_rebalance_costs:.2f} SATS')
     print(f'Daily Profit (Forwards and Rebals): {total_forwards_income + total_rebalance_costs:.2f} SATS')
