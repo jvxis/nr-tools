@@ -1,4 +1,4 @@
-# This a ALPHA code, please use at your own RISK
+# This an ALPHA code, please use at your own RISK
 # Usage: BOT Mode: command /check-orders or Crontab with option --cron
 
 import telebot
@@ -17,7 +17,7 @@ print("Amboss Order Approval Bot Started")
 def invoice(amount_to_pay,order_id):
     url = "http://jvx-gtr.local:3007/api/v1/payments"
     headers = {
-        "X-Api-Key": "LNBITS-INVOICEK-KEY",
+        "X-Api-Key": "LNBITS-INVOICE-KEY",
         "Content-type": "application/json"
     }
 
@@ -91,10 +91,10 @@ def check_offers():
         market = data.get('getUser', {}).get('market', {})
         offer_orders = market.get('offer_orders', {}).get('list', [])
 
-        # Print the entire offer list for debugging
+        # Print the entire orders list for debugging
         print("All Offers:", offer_orders)
 
-        # Find the first offer with status "VALID_CHANNEL_OPENING"
+        # Find the first offer with status "WAITING_FOR_SELLER_APPROVAL"
         valid_channel_opening_offer = next((offer for offer in offer_orders if offer.get('status') == "WAITING_FOR_SELLER_APPROVAL"), None)
 
         # Print the found offer for debugging
