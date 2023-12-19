@@ -14,6 +14,8 @@ NODE_NAME = "Your-node-name"
 FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
 
 TOTAL_OTHERS = 0
+TOTAL_OTHER_FEES = 0
+OTHER_FEES = ""
 
 def execute_command(command):
     # Execute the command and capture the output
@@ -22,6 +24,8 @@ def execute_command(command):
 
 def process_csv(csv_data, notes_filter=None):
     # Initialize sum of Amount
+    global TOTAL_OTHER_FEES
+    global OTHER_FEES
     total_amount = 0
 
     # Read CSV data
@@ -31,6 +35,9 @@ def process_csv(csv_data, notes_filter=None):
         if notes_filter is None or row['Notes'] == notes_filter:
             # Sum the Amount column
             total_amount += float(row['Amount'])
+        if row['Notes'] != None and row['Notes'] != "Circular payment routing fee" and row['Type'] == "fee:network":
+            OTHER_FEES += f"  Type:{row['Notes']} : {float(row['Amount']):.2f} SATS Transaction Type: {row['Type']}\n"
+            TOTAL_OTHER_FEES += float(row['Amount'])
 
     return total_amount
 
@@ -84,12 +91,16 @@ if __name__ == "__main__":
     print(f'Daily Profit (Forwards and Rebals): {total_forwards_income + total_rebalance_costs:.2f} SATS')
    
 
+   # Off-chain spend
+    print("Others Off-Chain Spend:")
+    print(OTHER_FEES)
+    print(f"Total:{TOTAL_OTHER_FEES:.2f} SATS")
     # Process and print invoice data
     print("Others Off-Chain Incomes:")
     process_invoice_csv(invoices_output)
-    
-    print(f"Off-chain Operation Profit: {total_forwards_income + TOTAL_OTHERS + total_rebalance_costs:.2f} SATS")
-    
+
+    print(f"Off-chain Operation Profit: {total_forwards_income + TOTAL_OTHERS + + TOTAL_OTHER_FEES + total_rebalance_costs:.2f} SATS")
+
 
     # Process on-chain balance
     print("\nOn-chain Balance:")
