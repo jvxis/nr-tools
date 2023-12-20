@@ -5,8 +5,10 @@ from telebot import types
 import subprocess
 
 TOKEN = 'YOUR-BOT-TOKEN'
+CHAT_ID = "YOUR-TELEGRAM_CHAT-ID"
 AMBOSS_TOKEN = 'AMBOSS TOKEN'
 API_MEMPOOL = 'https://mempool.space/api/v1/fees/recommended'
+# Acceptable cost limit
 limit_cost = 0.95
 # Replace with your Umbrel full path Ex. /home/<user>/umbrel
 path_to_umbrel = "YOUR-PATH-TO-UMBREL"
@@ -90,16 +92,20 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     try:
         # Run the command and capture the output
         print(f"Command: {command}")
-        result = subprocess.run(command, shell=True, check=True, capture_output=True, text=True)
+        result = subprocess.run(command, shell=True, check=True, capture_output=True)
 
         # Print the command output
-        print("Command Output:", result.stdout)
+        print("Command Output:", result.stdout.decode("utf-8"))
 
-        #Clean Output
-        output_str = str(result.stdout, 'utf-8').strip('{} ,')
+        # Parse the JSON output
+        try:
+            output_json = json.loads(result.stdout.decode("utf-8"))
+            funding_txid = output_json.get("funding_txid")
+            return funding_txid
+        except json.JSONDecodeError as json_error:
+            print(f"Error decoding JSON: {json_error}")
+            return None
 
-        # Return the command output or do further processing as needed
-        return output_str
     except subprocess.CalledProcessError as e:
         # Handle command execution errors
         print("Error executing command:", e)
@@ -204,12 +210,13 @@ def calculate_transaction_size(utxos_needed):
 
 def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     utxos_data = get_utxos()
+    channel_size = float(amount_input)
     total = sum(utxos_data['amounts'])
     utxos_needed = 0
-    amount_with_fees = amount_input
+    amount_with_fees = channel_size
     related_outpoints = []
 
-    if total < amount_input:
+    if total < channel_size:
         print("Não há UTXOs suficientes para transferir o valor desejado.")
         return -1, 0, None
 
@@ -217,13 +224,13 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
         utxos_needed += 1
         transaction_size = calculate_transaction_size(utxos_needed)
         fee_cost = transaction_size * fee_per_vbyte
-        amount_with_fees = amount_input + fee_cost
+        amount_with_fees = channel_size + fee_cost
 
         related_outpoints.append(utxo_outpoint)
 
         if utxo_amount >= amount_with_fees:
             break
-        amount_input -= utxo_amount
+        channel_size -= utxo_amount
 
     return utxos_needed, fee_cost, related_outpoints if related_outpoints else None
 
@@ -310,7 +317,7 @@ def send_telegram_message(message):
 
         class DummyChat:
             def __init__(self):
-                self.id = "-4012983440"  # Provide a default chat ID
+                self.id = CHAT_ID  # Provide a default chat ID
 
         message = DummyMessage()
     bot.send_message(message.chat.id, text="Checking Channels to Open...")
