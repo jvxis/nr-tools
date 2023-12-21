@@ -359,11 +359,13 @@ def send_telegram_message(message):
         return
     # Send funding tx to Telegram
     bot.send_message(message.chat.id, text=msg_open)
+    # Wait 5 seconds to get channel point
+    time.sleep(5)
 
     # Get Channel Point
     channel_point = get_channel_point(funding_tx)
     if channel_point is None:
-        msg_cp = f"Can't get channel point, please try to get it manually from LNDG"
+        msg_cp = f"Can't get channel point, please try to get it manually from LNDG for the funding txid: {funding_tx}"
         print(msg_cp)
         bot.send_message(message.chat.id,text=msg_cp)
         return
@@ -375,9 +377,13 @@ def send_telegram_message(message):
     bot.send_message(message.chat.id, text= "Confirming Channel to Amboss...")
     channel_confirmed = confirm_channel_point_to_amboss(valid_channel_opening_offer['id'],channel_point)
     if channel_confirmed is None:
-         msg_confirmed = "Can't confirm channel point to Amboss, try to do it manually"
+         msg_confirmed = f"Can't confirm channel point {channel_point} to Amboss, try to do it manually"
          print(msg_confirmed)
          bot.send_message(message.chat.id, text=msg_confirmed)
+         # Create the log file and write the channel_point value
+         log_file_path = "amboss_channel_point.log"
+         with open(log_file_path, "w") as log_file:
+            log_file.write(channel_point)
          return
     msg_confirmed = "Opened Channel confirmed to Amboss"
     print(msg_confirmed)
@@ -393,9 +399,15 @@ def execute_bot_behavior():
 if __name__ == "__main__":
     import sys
 
-    if len(sys.argv) > 1 and sys.argv[1] == '--cron':
-        # If --cron argument is provided, execute the scheduled bot behavior
-        execute_bot_behavior()
+    log_file_path = "amboss_channel_point.log"
+
+    # Check if the log file exists
+    if not os.path.exists(log_file_path):
+        if len(sys.argv) > 1 and sys.argv[1] == '--cron':
+            # If --cron argument is provided and log file doesn't exist, execute the scheduled bot behavior
+            execute_bot_behavior()
+        else:
+            # Otherwise, run the bot polling for new messages
+            bot.polling(none_stop=True)
     else:
-        # Otherwise, run the bot polling for new messages
-        bot.polling(none_stop=True)
+        print(f"The log file '{log_file_path}' already exists. This means you need to check if there is a pending channel to confirm to Amboss")
