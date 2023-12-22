@@ -12,6 +12,7 @@ API_MEMPOOL = 'https://mempool.space/api/v1/fees/recommended'
 limit_cost = 0.95
 # Replace with your Umbrel full path Ex. /home/<user>/umbrel
 path_to_umbrel = "YOUR-PATH-TO-UMBREL"
+full_path_bos = "YOUR-FULL-PATH-TO-BOS"
 
 bot = telebot.TeleBot(TOKEN)
 print("Amboss Channel Open Bot Started")
@@ -182,7 +183,7 @@ def connect_to_node(node_key_address):
 
 
 def get_utxos():
-    command = "bos utxos"
+    command = f"{full_path_bos}/bos utxos"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
@@ -217,7 +218,7 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     related_outpoints = []
 
     if total < channel_size:
-        print("Não há UTXOs suficientes para transferir o valor desejado.")
+        print(f"Não há UTXOs suficientes para abrir um canal de {channel_size} SATS. Total UTXOS: {total} SATS")
         return -1, 0, None
 
     for utxo_amount, utxo_outpoint in zip(utxos_data['amounts'], utxos_data['outpoints']):
