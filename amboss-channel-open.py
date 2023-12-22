@@ -285,12 +285,12 @@ def open_channel(pubkey, size, invoice):
         if utxos_needed == -1:
             msg_open = f"There isn't enough confirmed Balance to open a {size} SATS channel"
             print(msg_open)
-            return "-1", msg_open 
+            return -1, msg_open 
         # Check if Fee Cost is less than the Invoice
         if (fee_cost) >= float(invoice):
             msg_open = f"Can't open this channel now, the fee {fee_cost} is bigger or equal to {limit_cost*100}% of the Invoice paid by customer"
             print(msg_open)
-            return "-2", msg_open
+            return -2, msg_open
         # Good to open channel
         formatted_outpoints = ' '.join([f'--utxo {outpoint}' for outpoint in related_outpoints])
         print(f"Opening Channel: {pubkey}")
@@ -299,7 +299,7 @@ def open_channel(pubkey, size, invoice):
         if funding_tx is None:
             msg_open = "Problem to execute the LNCLI command to open the channel."
             print(msg_open)
-            return "-3", msg_open
+            return -3, msg_open
         msg_open = f"Channel opened with funding transaction: {funding_tx}"
         print(msg_open)
         return funding_tx, msg_open       
