@@ -397,6 +397,10 @@ def execute_bot_behavior():
     print("Executing bot behavior...")
     send_telegram_message(None)  # Pass None as a placeholder for the message parameter
 
+# Schedule the bot_behavior function to run every hour at the 21st and 51st minute
+schedule.every().hour.at(":21").do(execute_bot_behavior)
+schedule.every().hour.at(":51").do(execute_bot_behavior)
+
 if __name__ == "__main__":
     import sys
 
@@ -406,7 +410,9 @@ if __name__ == "__main__":
     if not os.path.exists(log_file_path):
         if len(sys.argv) > 1 and sys.argv[1] == '--cron':
             # If --cron argument is provided and log file doesn't exist, execute the scheduled bot behavior
-            execute_bot_behavior()
+            while True:
+                schedule.run_pending()
+                time.sleep(1)
         else:
             # Otherwise, run the bot polling for new messages
             bot.polling(none_stop=True)
