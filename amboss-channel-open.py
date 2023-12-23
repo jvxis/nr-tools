@@ -3,6 +3,9 @@ import telebot
 import json
 from telebot import types
 import subprocess
+import schedules
+import os
+import time
 
 TOKEN = 'YOUR-BOT-TOKEN'
 CHAT_ID = "YOUR-TELEGRAM_CHAT-ID"
