@@ -15,7 +15,7 @@ print("Amboss Order Approval Bot Started")
 
 # Function to generate an invoice - Use your LNBITS invoice Key
 def invoice(amount_to_pay,order_id):
-    url = "http://jvx-gtr.local:3007/api/v1/payments"
+    url = "http://your-server.local:3007/api/v1/payments"
     headers = {
         "X-Api-Key": "LNBITS-INVOICE-KEY",
         "Content-type": "application/json"
