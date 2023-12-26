@@ -10,7 +10,7 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot onchain fee calc started")
 
 def get_utxos():
-    command = "bos utxos"
+    command = "bos utxos --confirmed"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
