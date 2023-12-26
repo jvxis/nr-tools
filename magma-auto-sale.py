@@ -18,6 +18,7 @@ API_MEMPOOL = 'https://mempool.space/api/v1/fees/recommended'
 limit_cost = 0.95
 path_to_umbrel = "YOUR-FULL-PATH-TO-UMBREL"
 full_path_bos = "YOUR-FULL-PATH-TO-BOS"
+LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
 
 #Code
 bot = telebot.TeleBot(TOKEN)
@@ -25,9 +26,9 @@ print("Amboss Channel Open Bot Started")
 
 # Function to generate an invoice
 def invoice(amount_to_pay,order_id):
-    url = "http://jvx-gtr.local:3007/api/v1/payments"
+    url = "http://your-server.local:3007/api/v1/payments"
     headers = {
-        "X-Api-Key": "LNBITS-INVOICE-KEY",
+        "X-Api-Key": "LNBITS_INVOICE_KEY",
         "Content-type": "application/json"
     }
 
