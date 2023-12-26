@@ -6,7 +6,7 @@
 import subprocess
 
 def get_utxos():
-    command = "bos utxos"
+    command = "bos utxos --confirmed"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
