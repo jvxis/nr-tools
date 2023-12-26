@@ -1,0 +1,4 @@
+pyTelegramBotAPI>=4.14.1
+requests>=2.25.1
+schedule>=1.2.1
+telebot>=0.0.5
