@@ -22,7 +22,7 @@ bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot LNtools started")
 
 def get_lncli_utxos():
-    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent"
+    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
