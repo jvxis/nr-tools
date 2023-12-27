@@ -82,7 +82,7 @@ The same can be done with any Umbrel Services. Like, bitcoin, lightning-terminal
 This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info
 
 **Pre-reqs**
-1. You need to set up an account on https://sparkeer.space
+1. You need to set up an account on https://sparkseer.space
 2. Then you need to get the API-KEY
 3. Click on Node and then Account and click on the button GENERATE APY KEY
 ![image](https://github.com/jvxis/nr-tools/assets/108929149/6b320d56-7e6a-41f6-a3ca-d404635fe9fa)
