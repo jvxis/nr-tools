@@ -19,6 +19,7 @@ limit_cost = 0.95
 path_to_umbrel = "YOUR-FULL-PATH-TO-UMBREL"
 full_path_bos = "YOUR-FULL-PATH-TO-BOS"
 LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
+LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
 
 #Code
 bot = telebot.TeleBot(TOKEN)
@@ -26,9 +27,9 @@ print("Amboss Channel Open Bot Started")
 
 # Function to generate an invoice
 def invoice(amount_to_pay,order_id):
-    url = "http://your-server.local:3007/api/v1/payments"
+    url = LNBITS_URL
     headers = {
-        "X-Api-Key": "LNBITS_INVOICE_KEY",
+        "X-Api-Key": LNBITS_INVOICE_KEY,
         "Content-type": "application/json"
     }
 
@@ -152,17 +153,19 @@ def get_channel_point(hash_to_find):
 
 def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
     # Format the command
-    #command = (
-    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
-    #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
-    #    f"{formatted_outpoints} --local_amt={input_amount}"
-    #)
-    print(f"UTXOs: {formatted_outpoints}")
     command = (
         f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
         f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
-        f"--local_amt={input_amount}"
+        f"{formatted_outpoints} --local_amt={input_amount}"
     )
+    print(f"UTXOs: {formatted_outpoints}")
+    
+    # Option to not use the UTXOs
+    #command = (
+    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
+    #    f"--local_amt={input_amount}"
+    #)
 
     try:
         # Run the command and capture the output
@@ -179,11 +182,25 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
             return funding_txid
         except json.JSONDecodeError as json_error:
             print(f"Error decoding JSON: {json_error}")
+
+            # Save the command and JSON error to a log file
+            log_content = f"Command: {command}\nJSON Decode Error: {json_error}\n"
+            log_file_path = "amboss_open_command.log"
+            with open(log_file_path, "w") as log_file:
+                log_file.write(log_content)
+
             return None
 
     except subprocess.CalledProcessError as e:
         # Handle command execution errors
         print("Error executing command:", e)
+
+        # Save the command and error to a log file
+        log_content = f"Command: {command}\nError: {e}\n"
+        log_file_path = "amboss_open_command.log"
+        with open(log_file_path, "w") as log_file:
+            log_file.write(log_content)
+
         return None
 
 def get_fast_fee():
@@ -409,7 +426,7 @@ def open_channel(pubkey, size, invoice):
         # Run function to open channel
         funding_tx = execute_lnd_command(pubkey, fee_rate, formatted_outpoints, size)
         if funding_tx is None:
-            msg_open = "Problem to execute the LNCLI command to open the channel."
+            msg_open = "Problem to execute the LNCLI command to open the channel. Please check the Log Files"
             print(msg_open)
             return -3, msg_open
         msg_open = f"Channel opened with funding transaction: {funding_tx}"
@@ -540,9 +557,13 @@ def send_telegram_message(message):
     # Get Channel Point
     channel_point = get_channel_point(funding_tx)
     if channel_point is None:
-        msg_cp = f"Can't get channel point, please try to get it manually from LNDG for the funding txid: {funding_tx}"
+        log_file_path = "amboss_channel_point.log"
+        msg_cp = f"Can't get channel point, please check the log file {log_file_path} and try to get it manually from LNDG for the funding txid: {funding_tx}"
         print(msg_cp)
         bot.send_message(message.chat.id,text=msg_cp)
+        # Create the log file and write the channel_point value
+        with open(log_file_path, "w") as log_file:
+            log_file.write(funding_tx)
         return
     print(f"Channel Point: {channel_point}")
     bot.send_message(message.chat.id, text=f"Channel Point: {channel_point}")
@@ -552,14 +573,14 @@ def send_telegram_message(message):
     bot.send_message(message.chat.id, text= "Confirming Channel to Amboss...")
     channel_confirmed = confirm_channel_point_to_amboss(valid_channel_to_open['id'],channel_point)
     if channel_confirmed is None:
-         msg_confirmed = f"Can't confirm channel point {channel_point} to Amboss, try to do it manually"
-         print(msg_confirmed)
-         bot.send_message(message.chat.id, text=msg_confirmed)
-         # Create the log file and write the channel_point value
-         log_file_path = "amboss_channel_point.log"
-         with open(log_file_path, "w") as log_file:
+        log_file_path = "amboss_channel_point.log"
+        msg_confirmed = f"Can't confirm channel point {channel_point} to Amboss, check the log file {log_file_path} and try to do it manually"
+        print(msg_confirmed)
+        bot.send_message(message.chat.id, text=msg_confirmed)
+        # Create the log file and write the channel_point value
+        with open(log_file_path, "w") as log_file:
             log_file.write(channel_point)
-         return
+        return
     msg_confirmed = "Opened Channel confirmed to Amboss"
     print(msg_confirmed)
     print(f"Result: {channel_confirmed}")
@@ -582,9 +603,10 @@ if __name__ == "__main__":
     import sys
 
     log_file_path = "amboss_channel_point.log"
+    log_file_path2 = "amboss_open_command.log"
 
     # Check if the log file exists
-    if not os.path.exists(log_file_path):
+    if not os.path.exists(log_file_path) or not os.path.exists(log_file_path2):
         if len(sys.argv) > 1 and sys.argv[1] == '--cron':
              # Execute the scheduled bot behavior immediately
             execute_bot_behavior()
@@ -595,6 +617,8 @@ if __name__ == "__main__":
         else:
             # Otherwise, run the bot polling for new messages
             bot.polling(none_stop=True)
-    else:
-        print(f"The log file '{log_file_path}' already exists. This means you need to check if there is a pending channel to confirm to Amboss")
+    elif os.path.exists(log_file_path):
+        print(f"The log file {log_file_path} already exists. This means you need to check if there is a pending channel to confirm to Amboss. Check the {log_file_path} content")
+    elif os.path.exists(log_file_path2):
+        print(f"The log file {log_file_path2} already exists. This means you have a problem with the LNCLI command, check first the {log_file_path2} content and if the channel is opened")
 
