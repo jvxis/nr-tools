@@ -1,0 +1,47 @@
+PREPARAR INSTALACAO DO SCRIPT SATS4
+
+sudo umbrel/scripts/stop
+sudo apt-get update && sudo apt-get upgrade e depois reiniciar.
+............
+git clone https://github.com/jvxis/nr-tools.git
+sudo apt install screen
+
+cd nr-tools
+Gerar chave API e colocar na linha 12 tal como é instruido nas instrucoes do nr-tools
+Na linha 55 substituir /path_to_umbrel com o seguinte: ["/home/pais/umbrel/scripts/app", "compose", "lightning", "exec", "lnd", "lncli", "querymc"],
+
+sudo apt-get install python3-pip
+pip3 install requests
+python3 sats4plus.py (se tudo correr bem, abra outra instancia da linha de comandos e pode criar o servico)
+
+-------
+
+cd /etc/systemd/system/
+sudo touch sats4.service
+sudo nano sats4.service
+
+colar o seguinte texto para dentro.
+
+============
+[Unit]
+Description=sats4sats service
+Wants=lnd.service
+After=lnd.service
+
+[Service]
+ExecStart=/bin/screen -DmS sats4 python3 /home/pais/nr-tools/sats4plus.py
+Restart=always
+TimeoutSec=120
+RestartSec=30
+StandardOutput=null
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+===========
+
+sudo systemctl daemon-reload
+sudo systemctl enable sats4.service
+sudo systemctl restart sats4.service
+
+e deverá ficar tudo a funcionar daqui para a frente.
