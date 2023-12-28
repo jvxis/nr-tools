@@ -106,7 +106,21 @@ def confirm_channel_point_to_amboss(order_id, transaction):
     try:
         response = requests.post(url, headers=headers, json=data)
         response.raise_for_status()  # Raise an HTTPError for bad responses (4xx or 5xx)
-        return response.json()
+
+        json_response = response.json()
+
+        if 'errors' in json_response:
+            # Handle error in the JSON response and log it
+            error_message = json_response['errors'][0]['message']
+            log_content = f"Error in confirm_channel_point_to_amboss:\nOrder ID: {order_id}\nTransaction: {transaction}\nError Message: {error_message}\n"
+            log_file_path = "amboss_confirm_channel.log"
+            with open(log_file_path, "w") as log_file:
+                log_file.write(log_content)
+
+            return None
+        else:
+            return json_response
+
     except requests.exceptions.RequestException as e:
         print(f"Error making the request: {e}")
         return None
