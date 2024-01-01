@@ -515,7 +515,7 @@ def send_telegram_message(message):
                 failure_message = "Failed to accept the order. Check the accept_result for details."
                 bot.send_message(message.chat.id, text=failure_message)
                 print(failure_message)
-            return
+                return
         
         else:
             error_message = "Unexpected format in the order acceptance result. Check the accept_result for details."
