@@ -6,8 +6,13 @@ import subprocess
 import json
 import time
 
+BOT_TOKEN= 'BOT_TOKEN'
+CHAT_ID = YOUR_CHAT_ID
+PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
+
 # Replace 'YOUR_BOT_TOKEN' with your actual bot token
-bot = telebot.TeleBot('YOUR-BOT-TOKEN')
+bot = telebot.TeleBot(BOT_TOKEN)
+print("PeerSwapBot Started...")
 def execute_command(command):
     try:
         output = subprocess.check_output(command, text=True)
@@ -21,7 +26,7 @@ def send_formatted_output(chat_id, formatted_text):
 @bot.message_handler(commands=['listpeers'])
 def list_peers(message):
         # Execute the command and capture the output
-    output = subprocess.check_output(['/home/<user>/go/bin/pscli', 'listpeers'], text=True)
+    output = subprocess.check_output([f'{PATH_COMMAND}/pscli', 'listpeers'], text=True)
     if not output.startswith("Error"):
         # Parse the JSON output
         data = json.loads(output)
@@ -48,20 +53,27 @@ def list_peers(message):
             peer_info += f"\nPaid Fee: {peer['paid_fee']} sats\n"
 
             # Send the formatted information to the user
+            print(peer_info)
             send_formatted_output(message.chat.id, peer_info)
+            
 
     else:
+        print(output)
         send_formatted_output(message.chat.id, output)
         
 @bot.message_handler(commands=['listswaprequests'])
 def list_swap_requests(message):
-    output = execute_command(['/home/<user>/go/bin/pscli', 'listswaprequests'])
+    send_formatted_output(message.chat.id, "Checking PeerSwap Requests...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
+    print(output)
     send_formatted_output(message.chat.id, output)
 
 def scheduled_check():
     while True:
-        output = execute_command(['/home/<user>/go/bin/pscli', 'listswaprequests'])
-        send_formatted_output(-4012983440, output)  # Replace YOUR_USER_CHAT_ID with the actual user chat ID
+        send_formatted_output(CHAT_ID, "Checking PeerSwap Requests...")
+        output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
+        print(output)
+        send_formatted_output(CHAT_ID, output)  # Replace YOUR_USER_CHAT_ID with the actual user chat ID
         time.sleep(600)  # Sleep for 10 minutes (600 seconds)
 
 # Start the scheduled check in a separate thread
