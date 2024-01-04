@@ -102,6 +102,50 @@ def format_listswaps_output(data):
             f"LND Channel ID: {swap['lnd_chan_id']}\n\n"
         )
     return formatted_output
+
+def format_generic_output(data):
+    if not data:
+        return "Error executing command"
+
+    formatted_output = ""
+    formatted_output += f"Reserve Onchain: {data.get('reserve_onchain_msat', 'N/A')}\n"
+    formatted_output += f"Min Swap Amount: {data.get('min_swap_amount_msat', 'N/A')}\n"
+    formatted_output += f"Accept All Peers: {'Yes' if data.get('accept_all_peers', False) else 'No'}\n"
+    formatted_output += f"Allow New Swaps: {'Yes' if data.get('allow_new_swaps', False) else 'No'}\n"
+
+    allowlisted_peers = data.get('allowlisted_peers', [])
+    formatted_output += "Peers Allowed:\n" if allowlisted_peers else ""
+    for peer in allowlisted_peers:
+        formatted_output += f"  - {get_node_alias(peer)} | {peer}\n"
+
+    suspicious_peer_list = data.get('suspicious_peer_list', [])
+    formatted_output += "Suspicious Peers List:\n" if suspicious_peer_list else ""
+    for peer in suspicious_peer_list:
+        formatted_output += f"  - {get_node_alias(peer)} | {peer}\n"
+
+    return formatted_output
+
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    send_formatted_output(message.chat.id, "Welcome to PeerSwapBot! Type /help to see the list of available commands and their usage.")
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "Available commands:\n"
+        "/listpeers - List information about connected peers\n"
+        "/listswaprequests - List PeerSwap Requests\n"
+        "/swapin sat_amt channel_id asset - Initiate a swap-in\n"
+        "/swapout sat_amt channel_id asset - Initiate a swap-out\n"
+        "/listswaps - List information about active swaps\n"
+        "/lbtc-getbalance - Get the LBTC balance\n"
+        "/lbtc-getaddress - Get the LBTC address\n"
+        "/addpeer pub_key - Add a peer by providing their public key\n"
+        "/reloadpolicy - Reload policy settings\n"
+        "/start - Get started with PeerSwapBot\n"
+        "/help - Display this help message\n"
+    )
+    send_formatted_output(message.chat.id, help_text)
     
 @bot.message_handler(commands=['listpeers'])
 def list_peers(message):
@@ -185,6 +229,61 @@ def list_swaps(message):
     send_formatted_output(message.chat.id, "Checking PeerSwap Swaps...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaps'])
     formatted_output = format_listswaps_output(json.loads(output))
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+
+@bot.message_handler(commands=['lbtc-getbalance'])
+def lbtc_getbalance(message):
+    send_formatted_output(message.chat.id, "Fetching LBTC Balance...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getbalance'])
+    try:
+        data = json.loads(output)
+        formatted_output = f"Amount: {data['sat_amount']} sats"
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+
+@bot.message_handler(commands=['lbtc-getaddress'])
+def lbtc_getaddress(message):
+    send_formatted_output(message.chat.id, "Fetching LBTC Address...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getaddress'])
+    try:
+        data = json.loads(output)
+        formatted_output = f"LBTC Address: {data['address']}"
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+
+@bot.message_handler(commands=['addpeer'])
+def add_peer(message):
+    try:
+        # Extracting the public key from the message text
+        pub_key = message.text.split(" ")[1]
+    except IndexError:
+        send_formatted_output(message.chat.id, "Please provide the public key as a parameter.")
+        return
+
+    send_formatted_output(message.chat.id, f"Adding Peer with Public Key: {pub_key}...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'addpeer', '--peer_pubkey', pub_key])
+    try:
+        data = json.loads(output)
+        formatted_output = format_generic_output(data)
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+    
+@bot.message_handler(commands=['reloadpolicy'])
+def reload_policy(message):
+    send_formatted_output(message.chat.id, "Reloading Policy...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'reloadpolicy'])
+    try:
+        data = json.loads(output)
+        formatted_output = format_generic_output(data)
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
     print(formatted_output)
     send_formatted_output(message.chat.id, formatted_output)
 
