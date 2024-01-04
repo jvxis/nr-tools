@@ -5,14 +5,26 @@ import telebot
 import subprocess
 import json
 import time
+import requests
 
 BOT_TOKEN= 'BOT_TOKEN'
 CHAT_ID = YOUR_CHAT_ID
 PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
+MEMPOOL_TX="https://mempool.space/tx/"
 
 # Replace 'YOUR_BOT_TOKEN' with your actual bot token
 bot = telebot.TeleBot(BOT_TOKEN)
 print("PeerSwapBot Started...")
+
+def get_node_alias(pub_key):
+    try:
+        response = requests.get(f"https://mempool.space/api/v1/lightning/nodes/{pub_key}")
+        data = response.json()
+        return data.get('alias', '')
+    except Exception as e:
+        print(f"Error fetching node alias: {str(e)}")
+        return ''
+    
 def execute_command(command):
     try:
         output = subprocess.check_output(command, text=True)
@@ -35,6 +47,8 @@ def format_swap_output(data):
         return "Error executing swapin command"
 
     swap = data['swap']
+    initiator_alias = get_node_alias(swap['initiator_node_id'])
+    peer_alias = get_node_alias(swap['peer_node_id'])
     formatted_output = (
         f"ID: {swap['id']}\n"
         f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
@@ -42,15 +56,41 @@ def format_swap_output(data):
         f"Type: {swap['type']}\n"
         f"Role: {swap['role']}\n"
         f"State: {swap['state']}\n"
-        f"Initiator Node ID: {swap['initiator_node_id']}\n"
-        f"Peer Node ID: {swap['peer_node_id']}\n"
+        f"Initiator Node ID: {initiator_alias} | {swap['initiator_node_id']}\n"
+        f"Peer Node ID: {peer_alias} | {swap['peer_node_id']}\n"
         f"Amount: {swap['amount']}\n"
         f"Channel ID: {swap['channel_id']}\n"
-        f"Opening TX ID: {swap['opening_tx_id']}\n"
+        f"Opening TX ID: {MEMPOOL_TX}{swap['opening_tx_id']}\n"
         f"Claim TX ID: {swap['claim_tx_id']}\n"
         f"Cancel Message: {swap['cancel_message']}\n"
         f"LND Channel ID: {swap['lnd_chan_id']}\n"
     )
+    return formatted_output
+
+def format_listswaps_output(data):
+    if not data['swaps']:
+        return "No PeerSwap Swaps available"
+
+    formatted_output = ""
+    for swap in data['swaps']:
+        initiator_alias = get_node_alias(swap['initiator_node_id'])
+        peer_alias = get_node_alias(swap['peer_node_id'])
+        formatted_output += (
+            f"ID: {swap['id']}\n"
+            f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
+            f"Asset: {swap['asset']}\n"
+            f"Type: {swap['type']}\n"
+            f"Role: {swap['role']}\n"
+            f"State: {swap['state']}\n"
+            f"Initiator Node ID: {initiator_alias} | {swap['initiator_node_id']}\n"
+            f"Peer Node ID: {peer_alias} | {swap['peer_node_id']}\n"
+            f"Amount: {swap['amount']}\n"
+            f"Channel ID: {swap['channel_id']}\n"
+            f"Opening TX ID: {MEMPOOL_TX}{swap['opening_tx_id']}\n"
+            f"Claim TX ID: {swap['claim_tx_id']}\n"
+            f"Cancel Message: {swap['cancel_message']}\n"
+            f"LND Channel ID: {swap['lnd_chan_id']}\n\n"
+        )
     return formatted_output
     
 @bot.message_handler(commands=['listpeers'])
@@ -63,7 +103,8 @@ def list_peers(message):
 
         # Iterate through peers and send information in a readable way
         for peer in data['peers']:
-            peer_info = f"Node ID: {peer['node_id']}\n"
+            peer_alias = get_node_alias(peer['node_id'])
+            peer_info = f"Node ID: {peer_alias} | {peer['node_id']}\n"
             peer_info += f"Swaps Allowed: {'Yes' if peer['swaps_allowed'] else 'No'}\n"
             peer_info += f"Supported Assets: {', '.join(peer['supported_assets'])}\n"
 
@@ -126,6 +167,14 @@ def swapin_command(message):
     command = [f'{PATH_COMMAND}/pscli', 'swapout', '--sat_amt', sat_amt, '--channel_id', channel_id, '--asset', asset]
     output = execute_command(command)
     formatted_output = format_swap_output(json.loads(output))
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+    
+@bot.message_handler(commands=['listswaps'])
+def list_swaps(message):
+    send_formatted_output(message.chat.id, "Checking PeerSwap Swaps...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaps'])
+    formatted_output = format_listswaps_output(json.loads(output))
     print(formatted_output)
     send_formatted_output(message.chat.id, formatted_output)
 
