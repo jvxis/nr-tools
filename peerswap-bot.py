@@ -11,6 +11,7 @@ BOT_TOKEN= 'BOT_TOKEN'
 CHAT_ID = YOUR_CHAT_ID
 PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
 MEMPOOL_TX="https://mempool.space/tx/"
+LIQUID_TX="https://liquid.network/tx/"
 
 # Replace 'YOUR_BOT_TOKEN' with your actual bot token
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -49,6 +50,11 @@ def format_swap_output(data):
     swap = data['swap']
     initiator_alias = get_node_alias(swap['initiator_node_id'])
     peer_alias = get_node_alias(swap['peer_node_id'])
+    if swap['asset'] == 'btc':
+        network = MEMPOOL_TX 
+    else: 
+        network = LIQUID_TX
+        
     formatted_output = (
         f"ID: {swap['id']}\n"
         f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
@@ -60,7 +66,7 @@ def format_swap_output(data):
         f"Peer Node ID: {peer_alias} | {swap['peer_node_id']}\n"
         f"Amount: {swap['amount']}\n"
         f"Channel ID: {swap['channel_id']}\n"
-        f"Opening TX ID: {MEMPOOL_TX}{swap['opening_tx_id']}\n"
+        f"Opening TX ID: {network}{swap['opening_tx_id']}\n"
         f"Claim TX ID: {swap['claim_tx_id']}\n"
         f"Cancel Message: {swap['cancel_message']}\n"
         f"LND Channel ID: {swap['lnd_chan_id']}\n"
@@ -75,6 +81,10 @@ def format_listswaps_output(data):
     for swap in data['swaps']:
         initiator_alias = get_node_alias(swap['initiator_node_id'])
         peer_alias = get_node_alias(swap['peer_node_id'])
+        if swap['asset'] == 'btc':
+            network = MEMPOOL_TX 
+        else: 
+            network = LIQUID_TX
         formatted_output += (
             f"ID: {swap['id']}\n"
             f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
@@ -86,7 +96,7 @@ def format_listswaps_output(data):
             f"Peer Node ID: {peer_alias} | {swap['peer_node_id']}\n"
             f"Amount: {swap['amount']}\n"
             f"Channel ID: {swap['channel_id']}\n"
-            f"Opening TX ID: {MEMPOOL_TX}{swap['opening_tx_id']}\n"
+            f"Opening TX ID: {network}{swap['opening_tx_id']}\n"
             f"Claim TX ID: {swap['claim_tx_id']}\n"
             f"Cancel Message: {swap['cancel_message']}\n"
             f"LND Channel ID: {swap['lnd_chan_id']}\n\n"
