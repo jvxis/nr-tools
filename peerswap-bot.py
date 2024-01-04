@@ -23,6 +23,36 @@ def execute_command(command):
 def send_formatted_output(chat_id, formatted_text):
     bot.send_message(chat_id, formatted_text)
     
+def format_output(data):
+    if not data['requested_swaps']:
+        return "No PeerSwap Requests available"
+    
+    # You can customize the formatting based on the structure of requested_swaps
+    return json.dumps(data['requested_swaps'], indent=2)
+
+def format_swap_output(data):
+    if 'swap' not in data:
+        return "Error executing swapin command"
+
+    swap = data['swap']
+    formatted_output = (
+        f"ID: {swap['id']}\n"
+        f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
+        f"Asset: {swap['asset']}\n"
+        f"Type: {swap['type']}\n"
+        f"Role: {swap['role']}\n"
+        f"State: {swap['state']}\n"
+        f"Initiator Node ID: {swap['initiator_node_id']}\n"
+        f"Peer Node ID: {swap['peer_node_id']}\n"
+        f"Amount: {swap['amount']}\n"
+        f"Channel ID: {swap['channel_id']}\n"
+        f"Opening TX ID: {swap['opening_tx_id']}\n"
+        f"Claim TX ID: {swap['claim_tx_id']}\n"
+        f"Cancel Message: {swap['cancel_message']}\n"
+        f"LND Channel ID: {swap['lnd_chan_id']}\n"
+    )
+    return formatted_output
+    
 @bot.message_handler(commands=['listpeers'])
 def list_peers(message):
         # Execute the command and capture the output
@@ -65,16 +95,48 @@ def list_peers(message):
 def list_swap_requests(message):
     send_formatted_output(message.chat.id, "Checking PeerSwap Requests...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
-    print(output)
-    send_formatted_output(message.chat.id, output)
+    formatted_output = format_output(json.loads(output))
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+    
+@bot.message_handler(commands=['swapin'])
+def swapin_command(message):
+    # Extracting parameters from the user's message
+    try:
+        _, sat_amt, channel_id, asset = message.text.split()
+    except ValueError:
+        send_formatted_output(message.chat.id, "Usage: /swapin sat_amt channel_id asset")
+        return
+
+    command = [f'{PATH_COMMAND}/pscli', 'swapin', '--sat_amt', sat_amt, '--channel_id', channel_id, '--asset', asset]
+    output = execute_command(command)
+    formatted_output = format_swap_output(json.loads(output))
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
+
+@bot.message_handler(commands=['swapout'])
+def swapin_command(message):
+    # Extracting parameters from the user's message
+    try:
+        _, sat_amt, channel_id, asset = message.text.split()
+    except ValueError:
+        send_formatted_output(message.chat.id, "Usage: /swapout sat_amt channel_id asset")
+        return
+
+    command = [f'{PATH_COMMAND}/pscli', 'swapout', '--sat_amt', sat_amt, '--channel_id', channel_id, '--asset', asset]
+    output = execute_command(command)
+    formatted_output = format_swap_output(json.loads(output))
+    print(formatted_output)
+    send_formatted_output(message.chat.id, formatted_output)
 
 def scheduled_check():
     while True:
         send_formatted_output(CHAT_ID, "Checking PeerSwap Requests...")
         output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
-        print(output)
-        send_formatted_output(CHAT_ID, output)  # Replace YOUR_USER_CHAT_ID with the actual user chat ID
-        time.sleep(600)  # Sleep for 10 minutes (600 seconds)
+        formatted_output = format_output(json.loads(output))
+        print(formatted_output)
+        send_formatted_output(CHAT_ID, formatted_output)
+        time.sleep(1200)  # Sleep for 20 minutes (1200 seconds)
 
 # Start the scheduled check in a separate thread
 import threading
