@@ -143,9 +143,13 @@ def pay_invoice(message):
             # Execute the command
             result = subprocess.run(pay_invoice, shell=True, capture_output=True, text=True)
             output = result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
+            bot.send_message(message.chat.id, "💸 Pay Result Output:\n")
+            # Split the output into smaller chunks
+            message_chunks = [output[i:i + 4096] for i in range(0, len(output), 4096)]
 
-            # Send the output back to the user
-            bot.send_message(message.chat.id, f"✅ Command executed:\n\n{output}")
+            # Send each chunk as a separate message
+            for chunk in message_chunks:
+                bot.send_message(message.chat.id, chunk)
 
         except Exception as e:
             bot.send_message(message.chat.id, f"❌ An error occurred: {e}")
@@ -164,7 +168,7 @@ def invoice(message):
         bot.send_message(message.chat.id, f"{PAY_EMOJI} Total Invoice: {input_amount} sats :\n{memo}")
         bot.send_message(message.chat.id, hash)
         bot.send_message(message.chat.id, f"{MONEY_EMOJI} Invoice:")
-        bot.send_message(message.chat.id, request)
+        bot.send_message(message.chat.id, f"```\n{request}\n```", parse_mode='Markdown')
         bot.send_message(message.chat.id, f"{ATTENTION_EMOJI} This invoice will expire in {(time/3600):.2f} hours")
        
     except IndexError:
