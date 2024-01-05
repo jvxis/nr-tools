@@ -2,6 +2,8 @@ import subprocess
 import telebot
 import requests
 import json
+import shutil
+import os
 
 # Your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
@@ -10,6 +12,10 @@ PATH_TO_UMBREL = "YOUR-FULL-PATH-TO-UMBREL"
 
 LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
 LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
+#path to your elements wallets
+BCK_SOURCE_PATH = "/home/<user>/app-data/elements/data/liquidv1/wallets"
+# Any external folder, external storage device where you want to place the backup
+BCK_DEST_PATH = "/mnt/backup/liquid"
 
 # Emoji constants
 SUCCESS_EMOJI = "✅"
@@ -34,7 +40,7 @@ def get_lncli_utxos():
         utxos = data.get("utxos", [])
     except json.JSONDecodeError as e:
         print(f"Error decoding lncli output: {e}")
-
+    print(f"Utxos:{utxos}")
     return utxos
 
 # Calculate transaction size in vBytes
@@ -51,7 +57,8 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     total = sum(utxo["amount_sat"] for utxo in utxos)
     utxos_needed = 0
     amount_with_fees = amount_input
-
+    print(f"Total UTXOS: {total} Sats")
+    print(f"Amount: {amount_input} Sats")
     if total < amount_input:
         return -1, 0
 
@@ -68,9 +75,9 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     return utxos_needed, fee_cost
 
 def make_invoice(amount_to_pay, message, expire):
-    url = LNBITS_URL
+    url = "http://jvx-gtr.local:3007/api/v1/payments"
     headers = {
-        "X-Api-Key": LNBITS_INVOICE_KEY,
+        "X-Api-Key": "40ffd7b9a66f49659637f7f86fc0b017",
         "Content-type": "application/json"
     }
 
@@ -173,5 +180,37 @@ def invoice(message):
        
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount, message and expiration time in seconds after the /invoice command. Ex: /invoice 100000 node-services-payment 1000")
+
+@bot.message_handler(commands=['bckliquidwallet'])
+def bckliquidwallet(message):
+    try:
+        source_folder = BCK_SOURCE_PATH
+        destination_folder = BCK_DEST_PATH
+        bot.reply_to(message, f"🗄️ Starting Liquid Wallet Backup...")
+
+        # Check if the destination folder exists, create it if not
+        if not os.path.exists(destination_folder):
+            bot.reply_to(message, f"📂 Creating folder {destination_folder}...")
+            os.makedirs(destination_folder)
+
+        # Copy files from the source folder to the destination folder
+        bot.reply_to(message, "💾 Backup started")
+
+        for item_name in os.listdir(source_folder):
+            source_item = os.path.join(source_folder, item_name)
+            destination_item = os.path.join(destination_folder, item_name)
+
+            if os.path.isfile(source_item):
+                # Copy files even if they exist in the destination
+                shutil.copy2(source_item, destination_item)
+            elif os.path.isdir(source_item):
+                # Skip if the directory already exists in the destination
+                if not os.path.exists(destination_item):
+                    shutil.copytree(source_item, destination_item, symlinks=True)
+
+        bot.reply_to(message, f"✅ Backup Operation successful. Wallets copied to {destination_folder}")
+    except Exception as e:
+        bot.reply_to(message, f"❌ Error: {str(e)}")
+        
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
