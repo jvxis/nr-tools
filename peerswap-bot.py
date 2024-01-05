@@ -30,7 +30,18 @@ def execute_command(command):
     try:
         output = subprocess.check_output(command, text=True)
         return output
+    except subprocess.CalledProcessError as e:
+        # Handle specific error messages
+        error_message = str(e.output).strip()
+        if "insufficient walletbalance" in error_message:
+            return f"Error Executing Command: {command} Insufficient Wallet Balance"
+        #elif "Error" in error_message:
+        #    return f"Error Executing Command: {command}  use /listswaps to get detail"
+
+        # If not a specific error, return a generic error message
+        return f"Error executing command: {command} - {error_message}\n Use /listswaps to get detail"
     except Exception as e:
+        # Handle other exceptions
         return f"Error executing command: {str(e)}"
 
 def send_formatted_output(chat_id, formatted_text):
@@ -45,7 +56,7 @@ def format_output(data):
 
 def format_swap_output(data):
     if 'swap' not in data:
-        return "Error executing swapin command"
+        return "Error executing swap command"
 
     swap = data['swap']
     initiator_alias = get_node_alias(swap['initiator_node_id'])
@@ -133,13 +144,13 @@ def start_command(message):
 def help_command(message):
     help_text = (
         "Available commands:\n"
-        "/listpeers - List information about connected peers\n"
+        "/listpeers - List information about available peers\n"
         "/listswaprequests - List PeerSwap Requests\n"
-        "/swapin sat_amt channel_id asset - Initiate a swap-in\n"
-        "/swapout sat_amt channel_id asset - Initiate a swap-out\n"
-        "/listswaps - List information about active swaps\n"
-        "/lbtc-getbalance - Get the LBTC balance\n"
-        "/lbtc-getaddress - Get the LBTC address\n"
+        "/swapin amount_in_sats channel_id asset - Initiate a swap-in - asset should be lbtc or btc\n"
+        "/swapout amount_in_sats channel_id asset - Initiate a swap-out - asset should be lbtc or btc\n"
+        "/listswaps - List information about swaps\n"
+        "/lbtcbalance - Get the LBTC balance\n"
+        "/lbtctaddress - Get the LBTC address\n"
         "/addpeer pub_key - Add a peer by providing their public key\n"
         "/reloadpolicy - Reload policy settings\n"
         "/start - Get started with PeerSwapBot\n"
@@ -205,9 +216,13 @@ def swapin_command(message):
 
     command = [f'{PATH_COMMAND}/pscli', 'swapin', '--sat_amt', sat_amt, '--channel_id', channel_id, '--asset', asset]
     output = execute_command(command)
-    formatted_output = format_swap_output(json.loads(output))
-    print(formatted_output)
-    send_formatted_output(message.chat.id, formatted_output)
+    if "Error" in output:
+        print(output)
+        send_formatted_output(message.chat.id, output)
+    else:
+        formatted_output = format_swap_output(json.loads(output))
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['swapout'])
 def swapin_command(message):
@@ -220,9 +235,14 @@ def swapin_command(message):
 
     command = [f'{PATH_COMMAND}/pscli', 'swapout', '--sat_amt', sat_amt, '--channel_id', channel_id, '--asset', asset]
     output = execute_command(command)
-    formatted_output = format_swap_output(json.loads(output))
-    print(formatted_output)
-    send_formatted_output(message.chat.id, formatted_output)
+    if "Error" in output:
+        print(output)
+        send_formatted_output(message.chat.id, output)
+    else:
+        formatted_output = format_swap_output(json.loads(output))
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
+
     
 @bot.message_handler(commands=['listswaps'])
 def list_swaps(message):
