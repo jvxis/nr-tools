@@ -1,5 +1,17 @@
-# I am just starting - now it is just checking if there are swap requests
+# I am just starting - please report any issue
 # You need to check path, bot token and chat id
+#Command List
+#listpeers - List information about available peers
+#listswaprequests - List PeerSwap Requests
+#swapin - amount_in_sats channel_id asset | Initiate a swapin  asset should be lbtc or btc
+#swapout - amount_in_sats channel_id asset  | Initiate a swapout asset should be lbtc or btc
+#listswaps - List information about swaps
+#lbtcbalance - Get the LBTC balance
+#lbtctaddress - Get the LBTC address
+#addpeer - pub_key | Add a peer by providing their public key
+#reloadpolicy - Reload policy settings
+#start - Get started with PeerSwapBot
+#help - Display this help message
 
 import telebot
 import subprocess
@@ -252,7 +264,7 @@ def list_swaps(message):
     print(formatted_output)
     send_formatted_output(message.chat.id, formatted_output)
 
-@bot.message_handler(commands=['lbtc-getbalance'])
+@bot.message_handler(commands=['lbtcbalance'])
 def lbtc_getbalance(message):
     send_formatted_output(message.chat.id, "Fetching LBTC Balance...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getbalance'])
@@ -264,7 +276,7 @@ def lbtc_getbalance(message):
     print(formatted_output)
     send_formatted_output(message.chat.id, formatted_output)
 
-@bot.message_handler(commands=['lbtc-getaddress'])
+@bot.message_handler(commands=['lbtcaddress'])
 def lbtc_getaddress(message):
     send_formatted_output(message.chat.id, "Fetching LBTC Address...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getaddress'])
