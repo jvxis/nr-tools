@@ -113,6 +113,13 @@ def format_response(response_content):
 
     return formatted_hash, formatted_request
 
+def send_long_message(chat_id, long_message):
+    max_length = 4096
+    for i in range(0, len(long_message), max_length):
+        chunk = long_message[i:i+max_length]
+        print(chunk)
+        bot.send_message(chat_id, chunk)
+                
 @bot.message_handler(commands=['onchainfee'])
 def onchain_fee(message):
     try:
@@ -141,27 +148,37 @@ def pay_invoice(message):
     command = message.text.split(' ', 1)
     if len(command) == 2:
         payment_request = command[1]
+        print("Paying Invoice...\n")
         bot.send_message(chat_id, f'💸 Paying Invoice {payment_request}...')
-    
+
         # Replace the command with your actual command
-        pay_invoice = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli payinvoice {payment_request} --force"
+        pay_invoice_cmd = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli payinvoice {payment_request} --force"
 
         try:
-            # Execute the command
-            result = subprocess.run(pay_invoice, shell=True, capture_output=True, text=True)
-            output = result.stdout.strip() if result.returncode == 0 else result.stderr.strip()
-            bot.send_message(message.chat.id, "💸 Pay Result Output:\n")
-            # Split the output into smaller chunks
-            message_chunks = [output[i:i + 4096] for i in range(0, len(output), 4096)]
-
-            # Send each chunk as a separate message
-            for chunk in message_chunks:
-                bot.send_message(message.chat.id, chunk)
-
+            # Execute the command and capture both stdout and stderr
+            print(f"Executing Command:{pay_invoice_cmd}\n\n")
+            result = subprocess.run(pay_invoice_cmd, shell=True, capture_output=True, text=True)
+            print(f"THIS IS THE RESULT: {result}\n")
+            if result.returncode == 1:
+            # Capture both stdout and stderr
+                output = result.stdout.strip()
+                print(f"THIS IS THE OUTPUT: {output}\n")
+                bot.send_message(chat_id, "💸 Pay Result Output:\n")
+                if 'invoice expired' in output:
+                    bot.send_message(chat_id, "⚠️ Sorry This Invoice Expired\n")
+                elif 'invoice is already paid' in output:
+                    bot.send_message(chat_id, "❌ Sorry Invoice Already Paid\n")
+                elif 'Payment status: FAILED, reason: FAILURE_REASON_TIMEOUT' in output:
+                    bot.send_message(chat_id, "💤 Sorry Time out. Try again\n")
+                elif 'Payment status: SUCCEEDED' in output:
+                    bot.send_message(chat_id, "✅ Invoice Paid\n")
+                # Split the output into smaller chunks
+                send_long_message(chat_id, output)
         except Exception as e:
-            bot.send_message(message.chat.id, f"❌ An error occurred: {e}")
+            bot.send_message(chat_id, f"❌ An error occurred: {e}")
     else:
         bot.send_message(chat_id, '🙋 You need to type /pay payment-request')
+
         
 @bot.message_handler(commands=['invoice'])
 def invoice(message):
