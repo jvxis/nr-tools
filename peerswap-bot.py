@@ -5,7 +5,7 @@
 #listswaprequests - List PeerSwap Requests
 #swapin - amount_in_sats channel_id asset | Initiate a swapin  asset should be lbtc or btc
 #swapout - amount_in_sats channel_id asset  | Initiate a swapout asset should be lbtc or btc
-#listswaps - List information about swaps
+#listswaps - List information about swaps - use /listswaps last to get the most recent
 #lbtcbalance - Get the LBTC balance
 #lbtctaddress - Get the LBTC address
 #addpeer - pub_key | Add a peer by providing their public key
@@ -49,9 +49,9 @@ def execute_command(command):
             return f"Error Executing Command: {command} Insufficient Wallet Balance"
         #elif "Error" in error_message:
         #    return f"Error Executing Command: {command}  use /listswaps to get detail"
-
+        else:
         # If not a specific error, return a generic error message
-        return f"Error executing command: {command} - {error_message}\n Use /listswaps to get detail"
+            return f"Error executing command: {command} - {error_message}\n Use /listswaps to get detail"
     except Exception as e:
         # Handle other exceptions
         return f"Error executing command: {str(e)}"
@@ -96,6 +96,49 @@ def format_swap_output(data):
     )
     return formatted_output
 
+def format_single_swap_output(swap):
+    initiator_alias = get_node_alias(swap['initiator_node_id'])
+    peer_alias = get_node_alias(swap['peer_node_id'])
+    if swap['asset'] == 'btc':
+        network = MEMPOOL_TX 
+    else: 
+        network = LIQUID_TX
+    formatted_output = (
+        f"ID: {swap['id']}\n"
+        f"Created At: {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(int(swap['created_at'])))}\n"
+        f"Asset: {swap['asset']}\n"
+        f"Type: {swap['type']}\n"
+        f"Role: {swap['role']}\n"
+        f"State: {swap['state']}\n"
+        f"Initiator Node ID: {initiator_alias} | {swap['initiator_node_id']}\n"
+        f"Peer Node ID: {peer_alias} | {swap['peer_node_id']}\n"
+        f"Amount: {swap['amount']}\n"
+        f"Channel ID: {swap['channel_id']}\n"
+        f"Opening TX ID: {network}{swap['opening_tx_id']}\n"
+        f"Claim TX ID: {swap['claim_tx_id']}\n"
+        f"Cancel Message: {swap['cancel_message']}\n"
+        f"LND Channel ID: {swap['lnd_chan_id']}\n\n"
+    )
+    return formatted_output
+
+def list_recent_swaps(message, count=1):
+    send_formatted_output(message.chat.id, "Checking most recent PeerSwap Swap...")
+    command = [f'{PATH_COMMAND}/pscli', 'listswaps']
+    output = execute_command(command)
+    try:
+        data = json.loads(output)
+        swaps = data.get('swaps', [])
+        if swaps:
+            latest_swap = swaps[-1]  # Get the most recent swap
+            formatted_output = format_single_swap_output(latest_swap)
+            send_formatted_output(message.chat.id, formatted_output)
+        else:
+            send_formatted_output(message.chat.id, "No PeerSwap Swaps available")
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
+        
 def format_listswaps_output(data):
     if not data['swaps']:
         return "No PeerSwap Swaps available"
@@ -147,6 +190,23 @@ def format_generic_output(data):
         formatted_output += f"  - {get_node_alias(peer)} | {peer}\n"
 
     return formatted_output
+
+def list_all_swaps(message):
+    send_formatted_output(message.chat.id, "Checking PeerSwap Swaps...")
+    output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaps'])
+    try:
+        data = json.loads(output)
+        swaps = data.get('swaps', [])
+        if swaps:
+            for swap in swaps:
+                formatted_output = format_single_swap_output(swap)
+                send_formatted_output(message.chat.id, formatted_output)
+        else:
+            send_formatted_output(message.chat.id, "No PeerSwap Swaps available")
+    except json.JSONDecodeError as e:
+        formatted_output = f"Error decoding JSON: {str(e)}"
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -258,11 +318,11 @@ def swapin_command(message):
     
 @bot.message_handler(commands=['listswaps'])
 def list_swaps(message):
-    send_formatted_output(message.chat.id, "Checking PeerSwap Swaps...")
-    output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaps'])
-    formatted_output = format_listswaps_output(json.loads(output))
-    print(formatted_output)
-    send_formatted_output(message.chat.id, formatted_output)
+    args = message.text.split()[1:]
+    if "last" in args:
+        list_recent_swaps(message)
+    else:
+        list_all_swaps(message)
 
 @bot.message_handler(commands=['lbtcbalance'])
 def lbtc_getbalance(message):
@@ -334,3 +394,4 @@ threading.Thread(target=scheduled_check).start()
 
 # Polling to keep the bot running
 bot.polling()
+
