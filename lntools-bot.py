@@ -170,10 +170,13 @@ def pay_invoice(message):
                     bot.send_message(chat_id, "❌ Sorry Invoice Already Paid\n")
                 elif 'Payment status: FAILED, reason: FAILURE_REASON_TIMEOUT' in output:
                     bot.send_message(chat_id, "💤 Sorry Time out. Try again\n")
-                elif 'Payment status: SUCCEEDED' in output:
+                elif output is None and 'Payment status: SUCCEEDED' in result:
                     bot.send_message(chat_id, "✅ Invoice Paid\n")
                 # Split the output into smaller chunks
-                send_long_message(chat_id, output)
+                if output is None:
+                    send_long_message(chat_id, result)
+                else:
+                    send_long_message(chat_id, output)
         except Exception as e:
             bot.send_message(chat_id, f"❌ An error occurred: {e}")
     else:
