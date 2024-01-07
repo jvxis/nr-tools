@@ -207,30 +207,43 @@ def bckliquidwallet(message):
         source_folder = BCK_SOURCE_PATH
         destination_folder = BCK_DEST_PATH
         bot.reply_to(message, f"🗄️ Starting Liquid Wallet Backup...")
+        print("🗄️ Starting Liquid Wallet Backup...")
 
         # Check if the destination folder exists, create it if not
         if not os.path.exists(destination_folder):
             bot.reply_to(message, f"📂 Creating folder {destination_folder}...")
+            print("📂 Creating folder {destination_folder}...")
             os.makedirs(destination_folder)
 
         # Copy files from the source folder to the destination folder
         bot.reply_to(message, "💾 Backup started")
+        print("💾 Backup started")
+        updated_files = []
+        def copy_recursive(src, dest):
+            for item_name in os.listdir(src):
+                source_item = os.path.join(src, item_name)
+                destination_item = os.path.join(dest, item_name)
 
-        for item_name in os.listdir(source_folder):
-            source_item = os.path.join(source_folder, item_name)
-            destination_item = os.path.join(destination_folder, item_name)
-
-            if os.path.isfile(source_item):
-                # Copy files even if they exist in the destination
-                shutil.copy2(source_item, destination_item)
-            elif os.path.isdir(source_item):
-                # Skip if the directory already exists in the destination
-                if not os.path.exists(destination_item):
-                    shutil.copytree(source_item, destination_item, symlinks=True)
-
+                try:
+                    if os.path.isfile(source_item):
+                        shutil.copy2(source_item, destination_item)
+                        updated_files.append(destination_item)
+                    elif os.path.isdir(source_item):
+                        if not os.path.exists(destination_item):
+                            os.makedirs(destination_item)
+                        copy_recursive(source_item, destination_item)
+                except Exception as e:
+                    print(f"Error copying {source_item} to {destination_item}: {str(e)}")
+                    bot.reply_to(message,f"Error copying {source_item} to {destination_item}: {str(e)}")
+        
+        copy_recursive(source_folder, destination_folder)
         bot.reply_to(message, f"✅ Backup Operation successful. Wallets copied to {destination_folder}")
+        print(f"✅ Backup Operation successful. Wallets copied to {destination_folder}")
+        bot.reply_to(message, f"✅ Updated Files: {updated_files}")
+        print("📂 Updated Files:", updated_files)
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
+        print(f"❌ Error: {str(e)}")
         
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
