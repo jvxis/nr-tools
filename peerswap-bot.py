@@ -7,7 +7,7 @@
 #swapout - amount_in_sats channel_id asset  | Initiate a swapout asset should be lbtc or btc
 #listswaps - List information about swaps - use /listswaps last to get the most recent
 #lbtcbalance - Get the LBTC balance
-#lbtctaddress - Get the LBTC address
+#lbtcaddress - Get the LBTC address
 #addpeer - pub_key | Add a peer by providing their public key
 #reloadpolicy - Reload policy settings
 #start - Get started with PeerSwapBot
@@ -338,15 +338,20 @@ def lbtc_getbalance(message):
 
 @bot.message_handler(commands=['lbtcaddress'])
 def lbtc_getaddress(message):
-    send_formatted_output(message.chat.id, "Fetching LBTC Address...")
+    send_formatted_output(message.chat.id, "Fetching L-BTC Address...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getaddress'])
     try:
         data = json.loads(output)
-        formatted_output = f"LBTC Address: {data['address']}"
+        formatted_output = f"L-BTC Address"
+        liquid_address = data['address']
+        print(formatted_output)
+        print(liquid_address)
+        send_formatted_output(message.chat.id, formatted_output)
+        bot.send_message(message.chat.id, f"```\n{liquid_address}\n```", parse_mode="Markdown")
     except json.JSONDecodeError as e:
         formatted_output = f"Error decoding JSON: {str(e)}"
-    print(formatted_output)
-    send_formatted_output(message.chat.id, formatted_output)
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['addpeer'])
 def add_peer(message):
