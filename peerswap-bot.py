@@ -384,18 +384,24 @@ def reload_policy(message):
     print(formatted_output)
     send_formatted_output(message.chat.id, formatted_output)
 
-def scheduled_check():
-    while True:
-        send_formatted_output(CHAT_ID, "Checking PeerSwap Requests...")
-        output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
-        formatted_output = format_output(json.loads(output))
-        print(formatted_output)
-        send_formatted_output(CHAT_ID, formatted_output)
-        time.sleep(1200)  # Sleep for 20 minutes (1200 seconds)
+@bot.message_handler(commands=['lbtcsend'])
+def lbtc_send_to_address(message):
+    try:
+        _, sat_amt, address = message.text.split()
+    except ValueError:
+        send_formatted_output(message.chat.id, "Usage: /lbtcsend sat_amt address")
+        return
 
-# Start the scheduled check in a separate thread
-import threading
-threading.Thread(target=scheduled_check).start()
+    command = [f'{PATH_COMMAND}/pscli', 'lbtc-sendtoaddress', '--sat_amt', sat_amt, '--address', address]
+    output = execute_command(command)
+
+    if "Error" in output:
+        print(output)
+        send_formatted_output(message.chat.id, output)
+    else:
+        formatted_output = f"Successfully sent {sat_amt} sats to address: {address}"
+        print(formatted_output)
+        send_formatted_output(message.chat.id, formatted_output)
 
 # Polling to keep the bot running
 bot.polling()
