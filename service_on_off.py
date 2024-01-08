@@ -12,13 +12,29 @@ import subprocess
 TELEGRAM_TOKEN = "BOT_TOKEN"
 #replace with your path to app
 SCRIPT_PATH = "/path_to_umbrel/scripts/app"
+#replace with your path to other bash script
+OTHER_SCRIPT_PATH = "path/to/other/script"
 
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 print("Umbrel Service on-off started")
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, 'Bot is running. Send /on to turn on the service or /off to turn it off.')
+    bot.send_message(message.chat.id, 'Bot is running. Send /help for available commands.')
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "Available commands:\n"
+        "/start - Get started with PeerSwapBot\n"
+        "/help - Display this help message\n"
+        "/on - Activates a specific service. Usage: /on <service_name>\n"
+        "/off - Disables a specific service. Usage: /off <service_name>\n"
+        "/startscript - Runs a specific script. Usage: /startscript <script_name.sh>\n"
+        "/boot - Restarts a specific service. Usage: /boot <service_name>\n"
+    )
+    send_formatted_output(message.chat.id, help_text)
+
 
 @bot.message_handler(commands=['on'])
 def turn_on(message):
@@ -67,6 +83,23 @@ def turn_off(message):
             bot.send_message(chat_id, f'❌ Failed to restart {service_name}.')
     else:
         bot.send_message(chat_id, 'Usage: /boot <SERVICE_NAME>')       
+
+@bot.message_handler(commands=['startscript'])
+def start_script(message):
+    chat_id = message.chat.id
+    command = message.text.split(' ', 1)
+
+    if len(command) == 2:
+        script_name = command[1]
+        bot.send_message(chat_id, f'Executing script {script_name}...')
+        try:
+            subprocess.run(["bash", f'{OTHER_SCRIPT_PATH}/{script_name}'], check=True)
+            bot.send_message(chat_id, f'✅ Script {script_name} executed successfully.')
+        except subprocess.CalledProcessError as e:
+            bot.send_message(chat_id, f'❌ Failed to execute script {script_name}. Error: {e}')
+    else:
+        bot.send_message(chat_id, 'Usage: /startscript <script_name.sh>')
+
 
 if __name__ == '__main__':
     bot.polling(none_stop=True)

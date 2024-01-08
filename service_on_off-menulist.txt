@@ -1,0 +1,7 @@
+Edit the bot commands using Bot Father and paste all commands below
+
+start - Starts the bot and provides basic information
+on - Activates a specific service. Usage: /on <service_name>
+off - Disables a specific service. Usage: /off <service_name>
+startscript - Runs a specific script. Usage: /startscript <script_name.sh>
+boot - Restarts a specific service. Usage: /boot <service_name>
