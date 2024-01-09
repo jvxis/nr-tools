@@ -18,6 +18,8 @@ TOKEN = 'BOT-TOKEN'
 EXPIRE = 180000
 API_MEMPOOL = 'https://mempool.space/api/v1/fees/recommended'
 limit_cost = 0.95
+log_file_path = "amboss_channel_point.log"
+log_file_path2 = "amboss_open_command.log"
 
 #Code
 bot = telebot.TeleBot(TOKEN)
@@ -111,11 +113,11 @@ def confirm_channel_point_to_amboss(order_id, transaction):
             # Handle error in the JSON response and log it
             error_message = json_response['errors'][0]['message']
             log_content = f"Error in confirm_channel_point_to_amboss:\nOrder ID: {order_id}\nTransaction: {transaction}\nError Message: {error_message}\n"
-            log_file_path = "amboss_confirm_channel.log"
-            with open(log_file_path, "w") as log_file:
+            log_file_path_conf = "amboss_confirm_channel.log"
+            with open(log_file_path_conf, "w") as log_file:
                 log_file.write(log_content)
 
-            return None
+            return log_content
         else:
             return json_response
 
@@ -127,7 +129,7 @@ def confirm_channel_point_to_amboss(order_id, transaction):
 def get_channel_point(hash_to_find):
     def execute_lightning_command():
         command = [
-            f"{PATH_TO_UMBREL}/scripts/app",
+            f"{path_to_umbrel}/scripts/app",
             "compose",
             "lightning",
             "exec",
@@ -166,7 +168,7 @@ def get_channel_point(hash_to_find):
 def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
     # Format the command
     command = (
-        f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
+        f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
         f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
         f"{formatted_outpoints} --local_amt={input_amount}"
     )
@@ -174,7 +176,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     
     # Option to not use the UTXOs
     #command = (
-    #    f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
     #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
     #    f"--local_amt={input_amount}"
     #)
@@ -271,7 +273,7 @@ def get_address_by_pubkey(peer_pubkey):
 
 
 def connect_to_node(node_key_address):
-    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
+    command = f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
     print(f"Command:{command}")
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
@@ -286,7 +288,7 @@ def connect_to_node(node_key_address):
 
 
 def get_utxos():
-    command = f"{FULL_PATH_BOS}/bos utxos --confirmed"
+    command = f"{full_path_bos}/bos utxos --confirmed"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
@@ -524,80 +526,97 @@ def send_telegram_message(message):
     
     # Wait five minutes to check if the buyer pre-paid the offer
     time.sleep(300)
-    bot.send_message(message.chat.id, text="Checking Channels to Open...")
-    valid_channel_to_open = check_channel()
-
-    if not valid_channel_to_open:
-        bot.send_message(message.chat.id, text="No Channels pending to open.")
-        return
-
-    # Display the details of the valid channel opening offer
-    bot.send_message(message.chat.id, text="Order:")
-    formatted_offer = f"ID: {valid_channel_to_open['id']}\n"
-    formatted_offer += f"Customer: {valid_channel_to_open['account']}\n"
-    formatted_offer += f"Size: {valid_channel_to_open['size']} SATS\n"
-    formatted_offer += f"Invoice: {valid_channel_to_open['seller_invoice_amount']} SATS\n"
-    formatted_offer += f"Status: {valid_channel_to_open['status']}\n"
-
-    bot.send_message(message.chat.id, text=formatted_offer)
-
-    #Connecting to Peer
-    bot.send_message(message.chat.id, text=f"Connecting to peer: {valid_channel_to_open['account']}")
-    customer_addr = get_address_by_pubkey(valid_channel_to_open['account'])
-    #Connect
-    node_connection = connect_to_node(customer_addr)
-    if node_connection == 0:
-        print(f"Successfully connected to node {customer_addr}")
-        bot.send_message(message.chat.id, text=f"Successfully connected to node {customer_addr}")
-        
-    else:
-        print(f"Error connecting to node {customer_addr}:")
-        bot.send_message(message.chat.id, text=f"Can't connect to node {customer_addr}. Maybe it is already connected trying to open channel anyway")
-
-    #Open Channel
-    bot.send_message(message.chat.id, text=f"Open a {valid_channel_to_open['size']} SATS channel")    
-    funding_tx, msg_open = open_channel(valid_channel_to_open['account'], valid_channel_to_open['size'], valid_channel_to_open['seller_invoice_amount'])
-    # Deal with  errors and show on Telegram
-    if funding_tx == -1 or funding_tx == -2 or funding_tx == -3:
-        bot.send_message(message.chat.id, text=msg_open)
-        return
-    # Send funding tx to Telegram
-    bot.send_message(message.chat.id, text=msg_open)
-    # Wait 5 seconds to get channel point
-    time.sleep(5)
-
-    # Get Channel Point
-    channel_point = get_channel_point(funding_tx)
-    if channel_point is None:
-        log_file_path = "amboss_channel_point.log"
-        msg_cp = f"Can't get channel point, please check the log file {log_file_path} and try to get it manually from LNDG for the funding txid: {funding_tx}"
-        print(msg_cp)
-        bot.send_message(message.chat.id,text=msg_cp)
-        # Create the log file and write the channel_point value
-        with open(log_file_path, "w") as log_file:
-            log_file.write(funding_tx)
-        return
-    print(f"Channel Point: {channel_point}")
-    bot.send_message(message.chat.id, text=f"Channel Point: {channel_point}")
+    # Check if there is no error on a previous attempt to open a channel or confirm channel point to amboss
     
-    # Send Channel Point to Amboss
-    print("Confirming Channel to Amboss...")
-    bot.send_message(message.chat.id, text= "Confirming Channel to Amboss...")
-    channel_confirmed = confirm_channel_point_to_amboss(valid_channel_to_open['id'],channel_point)
-    if channel_confirmed is None:
-        log_file_path = "amboss_channel_point.log"
-        msg_confirmed = f"Can't confirm channel point {channel_point} to Amboss, check the log file {log_file_path} and try to do it manually"
+    if not os.path.exists(log_file_path) and not os.path.exists(log_file_path2):
+        bot.send_message(message.chat.id, text="Checking Channels to Open...")
+        valid_channel_to_open = check_channel()
+
+        if not valid_channel_to_open:
+            bot.send_message(message.chat.id, text="No Channels pending to open.")
+            return
+
+        # Display the details of the valid channel opening offer
+        bot.send_message(message.chat.id, text="Order:")
+        formatted_offer = f"ID: {valid_channel_to_open['id']}\n"
+        formatted_offer += f"Customer: {valid_channel_to_open['account']}\n"
+        formatted_offer += f"Size: {valid_channel_to_open['size']} SATS\n"
+        formatted_offer += f"Invoice: {valid_channel_to_open['seller_invoice_amount']} SATS\n"
+        formatted_offer += f"Status: {valid_channel_to_open['status']}\n"
+
+        bot.send_message(message.chat.id, text=formatted_offer)
+
+        #Connecting to Peer
+        bot.send_message(message.chat.id, text=f"Connecting to peer: {valid_channel_to_open['account']}")
+        customer_addr = get_address_by_pubkey(valid_channel_to_open['account'])
+        #Connect
+        node_connection = connect_to_node(customer_addr)
+        if node_connection == 0:
+            print(f"Successfully connected to node {customer_addr}")
+            bot.send_message(message.chat.id, text=f"Successfully connected to node {customer_addr}")
+        
+        else:
+            print(f"Error connecting to node {customer_addr}:")
+            bot.send_message(message.chat.id, text=f"Can't connect to node {customer_addr}. Maybe it is already connected trying to open channel anyway")
+
+        #Open Channel
+        bot.send_message(message.chat.id, text=f"Open a {valid_channel_to_open['size']} SATS channel")    
+        funding_tx, msg_open = open_channel(valid_channel_to_open['account'], valid_channel_to_open['size'], valid_channel_to_open['seller_invoice_amount'])
+        # Deal with  errors and show on Telegram
+        if funding_tx == -1 or funding_tx == -2 or funding_tx == -3:
+            bot.send_message(message.chat.id, text=msg_open)
+            return
+        # Send funding tx to Telegram
+        bot.send_message(message.chat.id, text=msg_open)
+        print("Waiting 10 seconds to get channel point...")
+        bot.send_message(message.chat.id, text="Waiting 10 seconds to get channel point...")
+        # Wait 10 seconds to get channel point
+        time.sleep(10)
+
+        # Get Channel Point
+        channel_point = get_channel_point(funding_tx)
+        if channel_point is None:
+            #log_file_path = "amboss_channel_point.log"
+            msg_cp = f"Can't get channel point, please check the log file {log_file_path} and try to get it manually from LNDG for the funding txid: {funding_tx}"
+            print(msg_cp)
+            bot.send_message(message.chat.id,text=msg_cp)
+            # Create the log file and write the channel_point value
+            with open(log_file_path, "w") as log_file:
+                log_file.write(funding_tx)
+            return
+        print(f"Channel Point: {channel_point}")
+        bot.send_message(message.chat.id, text=f"Channel Point: {channel_point}")
+
+        print("Waiting 10 seconds to Confirm Channel Point to Magma...")
+        bot.send_message(message.chat.id, text="Waiting 10 seconds to Confirm Channel Point to Magma...")
+        # Wait 10 seconds to get channel point
+        time.sleep(10)
+        # Send Channel Point to Amboss
+        print("Confirming Channel to Amboss...")
+        bot.send_message(message.chat.id, text= "Confirming Channel to Amboss...")
+        channel_confirmed = confirm_channel_point_to_amboss(valid_channel_to_open['id'],channel_point)
+        if channel_confirmed is None or "Error" in channel_confirmed:
+            #log_file_path = "amboss_channel_point.log"
+            if "Error" in channel_confirmed:
+                msg_confirmed = channel_confirmed
+            else:
+                msg_confirmed = f"Can't confirm channel point {channel_point} to Amboss, check the log file {log_file_path} and try to do it manually"
+            print(msg_confirmed)
+            bot.send_message(message.chat.id, text=msg_confirmed)
+            # Create the log file and write the channel_point value
+            with open(log_file_path, "w") as log_file:
+                log_file.write(channel_point)
+            return
+        msg_confirmed = "Opened Channel confirmed to Amboss"
         print(msg_confirmed)
+        print(f"Result: {channel_confirmed}")
         bot.send_message(message.chat.id, text=msg_confirmed)
-        # Create the log file and write the channel_point value
-        with open(log_file_path, "w") as log_file:
-            log_file.write(channel_point)
-        return
-    msg_confirmed = "Opened Channel confirmed to Amboss"
-    print(msg_confirmed)
-    print(f"Result: {channel_confirmed}")
-    bot.send_message(message.chat.id, text=msg_confirmed)
-    bot.send_message(message.chat.id, text=f"Result: {channel_confirmed}")
+        bot.send_message(message.chat.id, text=f"Result: {channel_confirmed}")
+    elif os.path.exists(log_file_path):
+        bot.send_message(message.chat.id, text=f"The log file {log_file_path} already exists. This means you need to check if there is a pending channel to confirm to Amboss. Check the {log_file_path} content")
+    elif os.path.exists(log_file_path2):
+        bot.send_message(message.chat.id, text=f"The log file {log_file_path2} already exists. This means you have a problem with the LNCLI command, check first the {log_file_path2} content and if the channel is opened")
+
 
 def execute_bot_behavior():
     # This function contains the logic you want to execute
@@ -614,10 +633,12 @@ schedule.every(10).minutes.do(execute_bot_behavior)
 if __name__ == "__main__":
     import sys
 
-    log_file_path = "amboss_channel_point.log"
-    log_file_path2 = "amboss_open_command.log"
+    #log_file_path = "amboss_channel_point.log"
+    #log_file_path2 = "amboss_open_command.log"
 
     # Check if the log file exists
+    print(f"Exist File Path1: {os.path.exists(log_file_path)}\n")
+    print(f"Exist File Path2: {os.path.exists(log_file_path2)}\n")
     if not os.path.exists(log_file_path) and not os.path.exists(log_file_path2):
         if len(sys.argv) > 1 and sys.argv[1] == '--cron':
              # Execute the scheduled bot behavior immediately
@@ -633,4 +654,3 @@ if __name__ == "__main__":
         print(f"The log file {log_file_path} already exists. This means you need to check if there is a pending channel to confirm to Amboss. Check the {log_file_path} content")
     elif os.path.exists(log_file_path2):
         print(f"The log file {log_file_path2} already exists. This means you have a problem with the LNCLI command, check first the {log_file_path2} content and if the channel is opened")
-
