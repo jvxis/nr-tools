@@ -1,8 +1,9 @@
-# nr-tools
-Essential and Life-Saver Tools for Node Runners.
+# NR-TOOLS
+**Essential and Life-Saver Tools for Node Runners.**
 
 All these tools are helping me a lot with my Lightning Node [Friendspool⚡🍻](http://amboss.space/c/friendspool)
-![image](https://github.com/jvxis/nr-tools/assets/108929149/c11e6d29-72ab-44ef-a9cb-bb8af8c5365a)
+
+![image](https://github.com/emtll/nr-tools-emtll/assets/125327891/1fbfab00-e543-40cb-9609-911e1c2171df)
 
 ## Basic Setup
 **How to Setup Telegram Bot:**
@@ -20,7 +21,9 @@ Look for the "chat" object within the response. The "id" field in that object is
 **Repository Installation:**
 1. Git Clone the Repository: `git clone https://github.com/jvxis/nr-tools.git`
 
-## htlcScan.sh
+##
+
+ ## [htlcScan.sh](https://github.com/jvxis/nr-tools/blob/main/htlcScan.sh)
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
 
 **How to Setup:**
@@ -37,7 +40,9 @@ This script checks for pending stuck htlcs that are near expiration height (< 13
 
 **Done!**
 
-## check_channelsdb_size.sh
+##
+
+## [check_channelsdb_size.sh](https://github.com/jvxis/nr-tools/blob/main/check_channelsdb_size.sh)
 This script checks the LND database size and restarts the lND and other services if it is bigger than 12GB. 
 
 **How to Setup:**
@@ -55,7 +60,9 @@ This script checks the LND database size and restarts the lND and other services
 
 **Done!**
 
-## service_on_off.py
+##
+
+## [service_on_off.py](https://github.com/jvxis/nr-tools/blob/main/service_on_off.py)
 This is a telegram bot to start, stop and restart Umbrel services. You can use /on name_of_service to start some services
 
 **How to Setup:**
@@ -78,7 +85,9 @@ The same can be done with any Umbrel Services. Like, bitcoin, lightning-terminal
 
 **Done!**
 
-## sats4plus.py
+##
+
+## [sats4plus.py](https://github.com/jvxis/nr-tools/blob/main/sats4plus.py)
 This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info
 
 Portuguese Instructions by Redin: https://github.com/jvxis/nr-tools/blob/main/SATS4.txt
@@ -100,7 +109,9 @@ Recommended to execute this code as a Linux Service or with screen: `screen -S s
 
 **Done!**
 
-## onchain-fee-calc.py
+##
+
+## [onchain-fee-calc.py](https://github.com/jvxis/nr-tools/blob/main/onchain-fee-calc.py)
 This code calculates how much on fees you will spend to send an on-chain transaction, considering your available UTXOs
 
 **Pre-reqs**
@@ -115,7 +126,9 @@ You need Balance of Satoshis (BOS) installed
 
 **Done!**
 
-## utxo-consolidator.py
+##
+
+## [utxo-consolidator.py](https://github.com/jvxis/nr-tools/blob/main/utxo-consolidator.py)
 Generates a BOS Fund command to consolidate your unspent UTXOS.
 
 **Pre-reqs**
@@ -128,7 +141,9 @@ You need Balance of Satoshis (BOS) installed
 
 **Done!**
 
-## openchannel-pro.py
+##
+
+## [openchannel-pro.py](https://github.com/jvxis/nr-tools/blob/main/openchannel-pro.py)
 This code, generates a channel open command considering only your unspent UTXOs needed. It helps to save sats during this process. So you can open your channels like a PRO!
 
 **How to Setup:**
@@ -144,7 +159,9 @@ This code, generates a channel open command considering only your unspent UTXOs 
 
 **Done!**
 
-## get_node_daily_balance.py
+##
+
+## [get_node_daily_balance.py](https://github.com/jvxis/nr-tools/blob/main/get_node_daily_balance.py)
 This code runs with your crontab every day and saves your node balance, considering Forwards and Rebalances
 
 **Pre-reqs**
