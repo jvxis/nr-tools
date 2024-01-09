@@ -4,7 +4,7 @@ import requests
 import json
 import shutil
 import sys
-sys.path.append("..")
+sys.path.append('/path/to/nr-tools/')
 import os
 from config import *
 
