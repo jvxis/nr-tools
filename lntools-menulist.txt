@@ -1,5 +1,7 @@
 Edit the bot commands using Bot Father and paste all commands below
 
+start - Start the bot
+help - Show the available commands list
 onchainfee - <amount> <fee_per_vbyte> | Calculate on-chain fee
 pay - <payment_request> | Pay a Lightning invoice
 invoice - <amount> <message> <expiration_seconds> | Create a Lightning invoice
