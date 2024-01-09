@@ -15,3 +15,4 @@ TOKEN = 'BOT-TOKEN'
 AMBOSS_TOKEN = 'AMBOSS-API-TOKEN'
 # Please check if it is the right path for your BOS Binary:
 FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
+PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
