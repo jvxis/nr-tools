@@ -19,7 +19,7 @@ import json
 import time
 import requests
 import sys
-sys.path.append('/home/emtll/nr-tools/')
+sys.path.append('/path/to/nr-tools/')
 from config import *
 
 BOT_TOKEN= 'BOT_TOKEN'
