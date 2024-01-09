@@ -9,7 +9,7 @@ import os
 import schedule
 from datetime import datetime
 import sys
-sys.path.append('/home/emtll/nr-tools/')
+sys.path.append('/path/to/nr-tools/')
 import os
 from config import *
 

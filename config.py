@@ -11,7 +11,6 @@ BCK_DEST_PATH = "/mnt/backup/liquid"
 # Chat ID: https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates:
 CHAT_ID="CHAT_ID"
 NODE="NODE NAME"
-TOKEN = 'BOT-TOKEN'
 AMBOSS_TOKEN = 'AMBOSS-API-TOKEN'
 # Please check if it is the right path for your BOS Binary:
 FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
