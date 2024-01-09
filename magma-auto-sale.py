@@ -618,7 +618,7 @@ if __name__ == "__main__":
     log_file_path2 = "amboss_open_command.log"
 
     # Check if the log file exists
-    if not os.path.exists(log_file_path) or not os.path.exists(log_file_path2):
+    if not os.path.exists(log_file_path) and not os.path.exists(log_file_path2):
         if len(sys.argv) > 1 and sys.argv[1] == '--cron':
              # Execute the scheduled bot behavior immediately
             execute_bot_behavior()
