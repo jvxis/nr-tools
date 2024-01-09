@@ -18,6 +18,9 @@ import subprocess
 import json
 import time
 import requests
+import sys
+sys.path.append('/home/emtll/nr-tools/')
+from config import *
 
 BOT_TOKEN= 'BOT_TOKEN'
 MEMPOOL_TX="https://mempool.space/tx/"
