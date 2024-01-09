@@ -8,7 +8,9 @@ sys.path.append('/path/to/nr-tools/')
 import os
 from config import *
 
-# Your Telegram bot token
+# Please, before using the bot, enter the necessary paths in the /nr-tools/config.py file
+
+# Insert your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
 
 # Emoji constants
