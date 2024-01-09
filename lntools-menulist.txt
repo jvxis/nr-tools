@@ -1,7 +1,7 @@
 Edit the bot commands using Bot Father and paste all commands below
 
-onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee
-pay <payment_request> - Pay a Lightning invoice
-invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice
+onchainfee - <amount> <fee_per_vbyte> | Calculate on-chain fee
+pay - <payment_request> | Pay a Lightning invoice
+invoice - <amount> <message> <expiration_seconds> | Create a Lightning invoice
 bckliquidwallet - Backup Liquid wallet
 newaddress - Get a new onchain address
