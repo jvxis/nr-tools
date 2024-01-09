@@ -8,18 +8,16 @@ import time
 import os
 import schedule
 from datetime import datetime
+import sys
+sys.path.append('/path/to/nr-tools/')
+import os
+from config import *
 
 #Constants
 TOKEN = 'BOT-TOKEN'
-AMBOSS_TOKEN = 'AMBOSS-API-TOKEN'
 EXPIRE = 180000
-CHAT_ID = "TELEGRAM-CHATID"
 API_MEMPOOL = 'https://mempool.space/api/v1/fees/recommended'
 limit_cost = 0.95
-path_to_umbrel = "YOUR-FULL-PATH-TO-UMBREL"
-full_path_bos = "YOUR-FULL-PATH-TO-BOS"
-LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
-LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
 
 #Code
 bot = telebot.TeleBot(TOKEN)
@@ -129,7 +127,7 @@ def confirm_channel_point_to_amboss(order_id, transaction):
 def get_channel_point(hash_to_find):
     def execute_lightning_command():
         command = [
-            f"{path_to_umbrel}/scripts/app",
+            f"{PATH_TO_UMBREL}/scripts/app",
             "compose",
             "lightning",
             "exec",
@@ -168,7 +166,7 @@ def get_channel_point(hash_to_find):
 def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
     # Format the command
     command = (
-        f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+        f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
         f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
         f"{formatted_outpoints} --local_amt={input_amount}"
     )
@@ -176,7 +174,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     
     # Option to not use the UTXOs
     #command = (
-    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
     #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
     #    f"--local_amt={input_amount}"
     #)
@@ -273,7 +271,7 @@ def get_address_by_pubkey(peer_pubkey):
 
 
 def connect_to_node(node_key_address):
-    command = f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
+    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
     print(f"Command:{command}")
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
@@ -288,7 +286,7 @@ def connect_to_node(node_key_address):
 
 
 def get_utxos():
-    command = f"{full_path_bos}/bos utxos --confirmed"
+    command = f"{FULL_PATH_BOS}/bos utxos --confirmed"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")

@@ -3,19 +3,13 @@ import telebot
 import requests
 import json
 import shutil
+import sys
+sys.path.append('/path/to/nr-tools/')
 import os
+from config import *
 
 # Your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
-
-PATH_TO_UMBREL = "YOUR-FULL-PATH-TO-UMBREL"
-
-LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
-LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
-#path to your elements wallets
-BCK_SOURCE_PATH = "/home/<user>/app-data/elements/data/liquidv1/wallets"
-# Any external folder, external storage device where you want to place the backup
-BCK_DEST_PATH = "/mnt/backup/liquid"
 
 # Emoji constants
 SUCCESS_EMOJI = "✅"
@@ -26,6 +20,27 @@ ATTENTION_EMOJI = "⚠️"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot LNtools started")
+
+@bot.message_handler(commands=['start'])
+def start(message):
+    welcome_message = (
+        "Welcome to LNtools Bot!\n\nYou can use the /help command to see the list of available commands and their descriptions.\n"
+    )
+    bot.reply_to(message, welcome_message)
+
+
+@bot.message_handler(commands=['help'])
+def help_command(message):
+    help_text = (
+        "Available Commands:\n"
+        "/onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee\n"
+        "/pay <payment_request> - Pay a Lightning invoice\n"
+        "/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice\n"
+        "/bckliquidwallet - Backup Liquid wallet\n"
+        "/newaddress - Get a new onchain address\n"
+    )
+    bot.reply_to(message, help_text)
+
 
 def get_lncli_utxos():
     command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
@@ -75,9 +90,9 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     return utxos_needed, fee_cost
 
 def make_invoice(amount_to_pay, message, expire):
-    url = "http://jvx-gtr.local:3007/api/v1/payments"
+    url = LNBITS_URL
     headers = {
-        "X-Api-Key": "40ffd7b9a66f49659637f7f86fc0b017",
+        "X-Api-Key": LNBITS_INVOICE_KEY,
         "Content-type": "application/json"
     }
 
@@ -244,6 +259,40 @@ def bckliquidwallet(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
         print(f"❌ Error: {str(e)}")
-        
+
+
+@bot.message_handler(commands=['newaddress'])
+def generate_new_address(message):
+    #lncli newaddress p2tr
+    try:
+        output = subprocess.check_output(["./lncli", "newaddress", "p2tr"], universal_newlines=True)
+        address_data = json.loads(output)
+
+        if "address" in address_data:
+            new_address = address_data["address"]
+            bot.reply_to(message, f"New address: {new_address}")
+        else:
+            bot.reply_to(message, "Error: Unable to retrieve new address.")
+    except subprocess.CalledProcessError as e:
+        bot.reply_to(message, f"Error: {e}")
+
+@bot.message_handler(commands=['newaddress'])
+def generate_new_address(message):
+    umbrel_command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli newaddress p2tr"
+    try:
+        output = subprocess.check_output(umbrel_command, shell=True, universal_newlines=True)
+        address_data = json.loads(output)
+
+        if "address" in address_data:
+            new_address = address_data["address"]
+            formatted_output = f"New Onchain Address:"
+            bot.reply_to(message, formatted_output)
+            bot.send_message(message.chat.id, f"```\n{new_address}\n```", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "Error: Unable to retrieve new address.")
+    except subprocess.CalledProcessError as e:
+        bot.reply_to(message, f"Error: {e}")
+
+
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)

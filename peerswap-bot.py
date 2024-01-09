@@ -18,10 +18,11 @@ import subprocess
 import json
 import time
 import requests
+import sys
+sys.path.append('/path/to/nr-tools/')
+from config import *
 
 BOT_TOKEN= 'BOT_TOKEN'
-CHAT_ID = YOUR_CHAT_ID
-PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
 MEMPOOL_TX="https://mempool.space/tx/"
 LIQUID_TX="https://liquid.network/tx/"
 
@@ -218,11 +219,12 @@ def help_command(message):
         "Available commands:\n"
         "/listpeers - List information about available peers\n"
         "/listswaprequests - List PeerSwap Requests\n"
-        "/swapin amount_in_sats channel_id asset - Initiate a swap-in - asset should be lbtc or btc\n"
-        "/swapout amount_in_sats channel_id asset - Initiate a swap-out - asset should be lbtc or btc\n"
+        "/swapin <amount> <channel_id> <asset> - Initiate a swap-in - asset should be lbtc or btc\n"
+        "/swapout <amount> <channel_id> <asset> - Initiate a swap-out - asset should be lbtc or btc\n"
         "/listswaps - List information about swaps\n"
         "/lbtcbalance - Get the LBTC balance\n"
         "/lbtctaddress - Get the LBTC address\n"
+        "/lbtcsend <amount> <address> - Sends lbtc to a lbtc address\n"
         "/addpeer pub_key - Add a peer by providing their public key\n"
         "/reloadpolicy - Reload policy settings\n"
         "/start - Get started with PeerSwapBot\n"

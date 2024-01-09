@@ -2,13 +2,13 @@ Edit the bot commands using Bot Father and paste all commands below
 
 listpeers - List information about available peers
 listswaprequests - List PeerSwap Requests
-swapin - amount_in_sats channel_id asset | Initiate a swapin  asset should be lbtc or btc
-swapout - amount_in_sats channel_id asset  | Initiate a swapout asset should be lbtc or btc
+swapin - <amount> <channel_id> <asset> | Initiate a swapin  asset should be lbtc or btc
+swapout - <amount> <channel_id> <asset>  | Initiate a swapout asset should be lbtc or btc
 listswaps - List information about swaps
 lbtcbalance - Get the LBTC balance
 lbtcaddress - Get the LBTC address
-addpeer - pub_key | Add a peer by providing their public key
+addpeer - <pub_key> | Add a peer by providing their public key
 reloadpolicy - Reload policy settings
-lbtcsend - Sends the sat amount to a lbtc address  <amount> <address>
+lbtcsend - <amount> <address> | Sends the sat amount to a lbtc address
 start - Get started with PeerSwapBot
 help - Display this help message
