@@ -3,17 +3,13 @@ import telebot
 import requests
 import json
 import shutil
+import sys
+sys.path.append("..")
 import os
+from config import *
 
 # Your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
-PATH_TO_UMBREL = "YOUR-FULL-PATH-TO-UMBREL"
-LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
-LNBITS_INVOICE_KEY = "YOUR-LNBITS-INVOICE-KEY"
-#path to your elements wallets
-BCK_SOURCE_PATH = "/home/<user>/app-data/elements/data/liquidv1/wallets"
-# Any external folder, external storage device where you want to place the backup
-BCK_DEST_PATH = "/mnt/backup/liquid"
 
 # Emoji constants
 SUCCESS_EMOJI = "✅"
@@ -94,9 +90,9 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     return utxos_needed, fee_cost
 
 def make_invoice(amount_to_pay, message, expire):
-    url = "http://jvx-gtr.local:3007/api/v1/payments"
+    url = LNBITS_URL
     headers = {
-        "X-Api-Key": "40ffd7b9a66f49659637f7f86fc0b017",
+        "X-Api-Key": LNBITS_INVOICE_KEY,
         "Content-type": "application/json"
     }
 

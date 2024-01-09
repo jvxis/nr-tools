@@ -20,8 +20,6 @@ import time
 import requests
 
 BOT_TOKEN= 'BOT_TOKEN'
-CHAT_ID = YOUR_CHAT_ID
-PATH_COMMAND = "PATH_TO_PSCLI" #Ex. /home/<user>/go/bin
 MEMPOOL_TX="https://mempool.space/tx/"
 LIQUID_TX="https://liquid.network/tx/"
 
