@@ -1,5 +1,9 @@
 #config.py
 
+# Enter the paths according to your device
+# The lack of any of the information will affect the operation of the bots
+# Currently config.py is required for bots: lntools-bot.py, magma-auto-sale.py and peerswap-bot.py
+
 PATH_TO_UMBREL = "YOUR-FULL-PATH-TO-UMBREL"
 LNBITS_URL = "http://your-server.local:3007/api/v1/payments"
 # http://umbrel.local:3007/uuidv4/<Your_Super_User_Password>:

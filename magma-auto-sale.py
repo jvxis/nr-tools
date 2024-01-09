@@ -8,10 +8,12 @@ import time
 import os
 import schedule
 from datetime import datetime
+import os
 import sys
 sys.path.append('/path/to/nr-tools/')
-import os
 from config import *
+
+# Please, before using the bot, enter the necessary paths in the /nr-tools/config.py file
 
 #Constants
 TOKEN = 'BOT-TOKEN'

@@ -22,6 +22,9 @@ import sys
 sys.path.append('/path/to/nr-tools/')
 from config import *
 
+# Please, before using the bot, enter the necessary paths in the /nr-tools/config.py file
+
+# Insert your Telegram bot token:
 BOT_TOKEN= 'BOT_TOKEN'
 MEMPOOL_TX="https://mempool.space/tx/"
 LIQUID_TX="https://liquid.network/tx/"
