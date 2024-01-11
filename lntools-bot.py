@@ -12,6 +12,7 @@ from config import *
 
 # Insert your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
+BOS_PATH = "path_to_your_BOS_binary"
 
 # Emoji constants
 SUCCESS_EMOJI = "✅"
@@ -43,7 +44,25 @@ def help_command(message):
     )
     bot.reply_to(message, help_text)
 
+def get_utxos():
+    command = f"{BOS_PATH}bos utxos --confirmed"
+    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
+    output = output.decode("utf-8")
+    utxos = {'amounts': [], 'outpoints': []}
 
+    if output:
+        lines = output.split('\n')
+        for line in lines:
+            if "amount:" in line:
+                amount = float(line.split()[1]) * 100000000
+                utxos['amounts'].append(amount)
+            if "outpoint:" in line:
+                outpoint = str(line.split()[1])
+                utxos['outpoints'].append(outpoint)
+
+    return utxos
+    
 def get_lncli_utxos():
     command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -217,6 +236,47 @@ def invoice(message):
        
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount, message and expiration time in seconds after the /invoice command. Ex: /invoice 100000 node-services-payment 1000")
+
+@bot.message_handler(commands=['consolidator'])
+def consolidator(message):
+    try:
+        user_amount = float(message.text.split()[1])
+        fee_per_vbyte = float(message.text.split()[2])
+        new_address = message.text.split()[3]
+        utxos_data = get_utxos()
+        qtd_utxos=0
+
+        # Filter UTXOs based on user's amount
+        filtered_utxos = [(outpoint, amount) for outpoint, amount in zip(utxos_data['outpoints'], utxos_data['amounts']) if amount <= user_amount]
+
+        # Calculate the sum of amounts for filtered UTXOs
+        total_filtered_amount = sum(amount for _, amount in filtered_utxos)
+
+        # Display the sum of amounts for filtered UTXOs
+        print(f"Total amount of UTXOs with amounts less than or equal to {user_amount:.0f} satoshis: {total_filtered_amount:.0f} satoshis")
+        bot.reply_to(message, text=f"Total amount of UTXOs with amounts less than or equal to {user_amount:.0f} satoshis: {total_filtered_amount:.0f} satoshis")
+        # Display the list of outpoints and their respective amounts for filtered UTXOs
+        print("\nList of UTXOs:")
+        bot.send_message(message.chat.id, text="List of UTXOs:")
+        for outpoint, amount in filtered_utxos:
+            print(f"Outpoint: {outpoint}, Amount: {amount:.0f} satoshis")
+            bot.send_message(message.chat.id, text=f"Outpoint: {outpoint}, Amount: {amount:.0f} satoshis")
+            qtd_utxos =+ 1
+    
+        transaction_size = calculate_transaction_size(qtd_utxos)
+        fee_cost = transaction_size * fee_per_vbyte
+        # Display the bos fund command line
+        utxo_arguments = ' '.join([f'--utxo {outpoint}' for outpoint, _ in filtered_utxos])
+        bos_fund_command = f"bos fund {new_address} {int(total_filtered_amount)} {utxo_arguments} --fee-rate {str(int(fee_per_vbyte))}"
+        print(f"\nBOS Fund Command:")
+        bot.send_message(message.chat.id, text="BOS Fund Command:")
+        print(f"{bos_fund_command}\n")
+        bot.send_message(message.chat.id, text=f"```\n{bos_fund_command}\n```", parse_mode='Markdown')
+        print(f"This transaction will cost approximately: {fee_cost} sats")
+        bot.send_message(message.chat.id, text=f"This transaction will cost approximately: {fee_cost} sats")
+    except IndexError:
+        bot.reply_to(message, "🙋‍ Please provide the amount fee-rate and btc address after the /consolidator command. Ex: /consolidator 1000000 40 bc1.....")
+
 
 @bot.message_handler(commands=['bckliquidwallet'])
 def bckliquidwallet(message):
