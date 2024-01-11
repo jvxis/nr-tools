@@ -23,11 +23,11 @@ def get_tx_id_hex(tx_id):
         # Check for HTTP errors
         response.raise_for_status()
 
-        # Parse the JSON response
-        result = response.json()
+       # Parse the JSON response
+        result = response.text
 
         # Access the tx_id_hex from the JSON response
-        tx_id_hex = result.get("hex")
+        tx_id_hex = result
 
         if tx_id_hex:
             return tx_id_hex
