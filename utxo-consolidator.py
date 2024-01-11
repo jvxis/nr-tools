@@ -60,12 +60,12 @@ def display_utxos_info(user_amount, new_address):
         print(f"Outpoint: {outpoint}, Amount: {amount:.0f} satoshis")
 
     utxo_arguments = ' '.join([f'--utxo {outpoint}' for outpoint, _ in filtered_utxos])
-    bos_fund_command = f"bos fund {new_address} {int(total_filtered_amount)} {utxo_arguments}"
+    bos_fund_command = f"bos fund {new_address} {int(total_filtered_amount)} {utxo_arguments} --fee-rate {fee_per_vbyte}"
     print("\nBOS Fund Command:")
     print(bos_fund_command)
 
 # Example usage:
 user_amount = float(input("\nEnter the desired amount in satoshis: "))
-fee_per_vbyte = float(input("\nEnter the fee rate in sat/vByte: "))
+fee_per_vbyte = int(input("\nEnter the fee rate in sat/vByte: "))
 new_address = input("\nEnter the onchain address for funding: ")
 display_utxos_info(user_amount, new_address)
