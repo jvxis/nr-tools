@@ -183,3 +183,7 @@ You need Balance of Satoshis (BOS) installed
 ** If you want to run adhoc for a specific date and month please run the code [get_node_balance.py](https://github.com/jvxis/nr-tools/blob/main/get_node_balance.py)
 
 **Done!**
+
+## [liquidpegin.py](https://github.com/jvxis/nr-tools/blob/main/liquidpegin.py) and [claimpegin.py](https://github.com/jvxis/nr-tools/blob/main/claimpegin.py)
+Use these 2 scripts to execute a Peg-in process from BTC to L-BTC using your own node ONLY!
+Tutorial By EMTLL: https://emtll.substack.com/p/como-emitir-btc-na-liquid-network
