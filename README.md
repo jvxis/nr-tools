@@ -1,4 +1,4 @@
-![Captura de Tela 2024-01-11 às 20 00 43](https://github.com/jvxis/nr-tools/assets/108929149/1711b14b-2328-4d16-a333-07ee65ac0358)
+![image](https://github.com/jvxis/nr-tools/assets/108929149/fb74f232-2efc-447e-8a2c-f38d7b8ced6e)
 
 # NR-TOOLS
 **Essential and Life-Saver Tools for Node Runners.**
