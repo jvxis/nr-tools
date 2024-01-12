@@ -26,12 +26,25 @@ from config import *
 
 # Insert your Telegram bot token:
 BOT_TOKEN= 'BOT_TOKEN'
+TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID"
 MEMPOOL_TX="https://mempool.space/tx/"
 LIQUID_TX="https://liquid.network/tx/"
 
 # Replace 'YOUR_BOT_TOKEN' with your actual bot token
 bot = telebot.TeleBot(BOT_TOKEN)
 print("PeerSwapBot Started...")
+
+# Function to check if the user is authorized
+def is_authorized_user(user_id):
+    return str(user_id) == TELEGRAM_USER_ID
+
+# Decorator function for authorization check
+def authorized_only(func):
+    def wrapper(message):
+        if is_authorized_user(message.from_user.id):
+            func(message)
+        else:
+            bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
 
 def get_node_alias(pub_key):
     try:
@@ -213,10 +226,12 @@ def list_all_swaps(message):
         send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['start'])
+@authorized_only
 def start_command(message):
     send_formatted_output(message.chat.id, "Welcome to PeerSwapBot! Type /help to see the list of available commands and their usage.")
 
 @bot.message_handler(commands=['help'])
+@authorized_only
 def help_command(message):
     help_text = (
         "Available commands:\n"
@@ -236,6 +251,7 @@ def help_command(message):
     send_formatted_output(message.chat.id, help_text)
     
 @bot.message_handler(commands=['listpeers'])
+@authorized_only
 def list_peers(message):
         # Execute the command and capture the output
     output = subprocess.check_output([f'{PATH_COMMAND}/pscli', 'listpeers'], text=True)
@@ -275,6 +291,7 @@ def list_peers(message):
         send_formatted_output(message.chat.id, output)
         
 @bot.message_handler(commands=['listswaprequests'])
+@authorized_only
 def list_swap_requests(message):
     send_formatted_output(message.chat.id, "Checking PeerSwap Requests...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'listswaprequests'])
@@ -283,6 +300,7 @@ def list_swap_requests(message):
     send_formatted_output(message.chat.id, formatted_output)
     
 @bot.message_handler(commands=['swapin'])
+@authorized_only
 def swapin_command(message):
     # Extracting parameters from the user's message
     try:
@@ -302,6 +320,7 @@ def swapin_command(message):
         send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['swapout'])
+@authorized_only
 def swapin_command(message):
     # Extracting parameters from the user's message
     try:
@@ -322,6 +341,7 @@ def swapin_command(message):
 
     
 @bot.message_handler(commands=['listswaps'])
+@authorized_only
 def list_swaps(message):
     args = message.text.split()[1:]
     if "last" in args:
@@ -330,6 +350,7 @@ def list_swaps(message):
         list_all_swaps(message)
 
 @bot.message_handler(commands=['lbtcbalance'])
+@authorized_only
 def lbtc_getbalance(message):
     send_formatted_output(message.chat.id, "Fetching LBTC Balance...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getbalance'])
@@ -342,6 +363,7 @@ def lbtc_getbalance(message):
     send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['lbtcaddress'])
+@authorized_only
 def lbtc_getaddress(message):
     send_formatted_output(message.chat.id, "Fetching L-BTC Address...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'lbtc-getaddress'])
@@ -359,6 +381,7 @@ def lbtc_getaddress(message):
         send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['addpeer'])
+@authorized_only
 def add_peer(message):
     try:
         # Extracting the public key from the message text
@@ -378,6 +401,7 @@ def add_peer(message):
     send_formatted_output(message.chat.id, formatted_output)
     
 @bot.message_handler(commands=['reloadpolicy'])
+@authorized_only
 def reload_policy(message):
     send_formatted_output(message.chat.id, "Reloading Policy...")
     output = execute_command([f'{PATH_COMMAND}/pscli', 'reloadpolicy'])
@@ -390,6 +414,7 @@ def reload_policy(message):
     send_formatted_output(message.chat.id, formatted_output)
 
 @bot.message_handler(commands=['lbtcsend'])
+@authorized_only
 def lbtc_send_to_address(message):
     try:
         _, sat_amt, address = message.text.split()
