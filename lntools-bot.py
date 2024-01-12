@@ -12,6 +12,8 @@ from config import *
 
 # Insert your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
+#Get it on https://t.me/userinfobot
+TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
 BOS_PATH = "path_to_your_BOS_binary"
 
 # Emoji constants
@@ -23,8 +25,22 @@ ATTENTION_EMOJI = "⚠️"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot LNtools started")
+# Function to check if the user is authorized
+def is_authorized_user(user_id):
+    return str(user_id) == TELEGRAM_USER_ID
 
+# Decorator function for authorization check
+def authorized_only(func):
+    def wrapper(message):
+        if is_authorized_user(message.from_user.id):
+            func(message)
+        else:
+            bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
+
+    return wrapper
+    
 @bot.message_handler(commands=['start'])
+@authorized_only
 def start(message):
     welcome_message = (
         "Welcome to LNtools Bot!\n\nYou can use the /help command to see the list of available commands and their descriptions.\n"
@@ -33,6 +49,7 @@ def start(message):
 
 
 @bot.message_handler(commands=['help'])
+@authorized_only
 def help_command(message):
     help_text = (
         "Available Commands:\n"
@@ -157,6 +174,7 @@ def send_long_message(chat_id, long_message):
         bot.send_message(chat_id, chunk)
                 
 @bot.message_handler(commands=['onchainfee'])
+@authorized_only
 def onchain_fee(message):
     try:
         input_amount = float(message.text.split()[1])
@@ -179,6 +197,7 @@ def onchain_fee(message):
         bot.reply_to(message, "🙋‍ Please provide the amount and fee per vByte after the /onchain-fee command. Ex: /onchain-fee 4000000 74")
 
 @bot.message_handler(commands=['pay'])
+@authorized_only
 def pay_invoice(message):
     chat_id = message.chat.id
     command = message.text.split(' ', 1)
@@ -220,6 +239,7 @@ def pay_invoice(message):
 
         
 @bot.message_handler(commands=['invoice'])
+@authorized_only
 def invoice(message):
     try:
         input_amount = float(message.text.split()[1])
@@ -238,6 +258,7 @@ def invoice(message):
         bot.reply_to(message, "🙋‍ Please provide the amount, message and expiration time in seconds after the /invoice command. Ex: /invoice 100000 node-services-payment 1000")
 
 @bot.message_handler(commands=['consolidator'])
+@authorized_only
 def consolidator(message):
     try:
         user_amount = float(message.text.split()[1])
@@ -279,6 +300,7 @@ def consolidator(message):
 
 
 @bot.message_handler(commands=['bckliquidwallet'])
+@authorized_only
 def bckliquidwallet(message):
     try:
         source_folder = BCK_SOURCE_PATH
@@ -322,23 +344,8 @@ def bckliquidwallet(message):
         bot.reply_to(message, f"❌ Error: {str(e)}")
         print(f"❌ Error: {str(e)}")
 
-
 @bot.message_handler(commands=['newaddress'])
-def generate_new_address(message):
-    #lncli newaddress p2tr
-    try:
-        output = subprocess.check_output(["./lncli", "newaddress", "p2tr"], universal_newlines=True)
-        address_data = json.loads(output)
-
-        if "address" in address_data:
-            new_address = address_data["address"]
-            bot.reply_to(message, f"New address: {new_address}")
-        else:
-            bot.reply_to(message, "Error: Unable to retrieve new address.")
-    except subprocess.CalledProcessError as e:
-        bot.reply_to(message, f"Error: {e}")
-
-@bot.message_handler(commands=['newaddress'])
+@authorized_only
 def generate_new_address(message):
     umbrel_command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli newaddress p2tr"
     try:
