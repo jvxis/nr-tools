@@ -10,6 +10,7 @@ import subprocess
 
 #replace with your bot token
 TELEGRAM_TOKEN = "BOT_TOKEN"
+TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID"
 #replace with your path to app
 SCRIPT_PATH = "/path_to_umbrel/scripts/app"
 #replace with your path to other bash script
@@ -18,11 +19,27 @@ OTHER_SCRIPT_PATH = "path/to/other/script"
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
 print("Umbrel Service on-off started")
 
+# Function to check if the user is authorized
+def is_authorized_user(user_id):
+    return str(user_id) == TELEGRAM_USER_ID
+
+# Decorator function for authorization check
+def authorized_only(func):
+    def wrapper(message):
+        if is_authorized_user(message.from_user.id):
+            func(message)
+        else:
+            bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
+
+    return wrapper
+
 @bot.message_handler(commands=['start'])
+@authorized_only
 def start(message):
     bot.send_message(message.chat.id, 'Bot is running. Send /help for available commands.')
 
 @bot.message_handler(commands=['help'])
+@authorized_only
 def help_command(message):
     help_text = (
         "Available commands:\n"
@@ -37,6 +54,7 @@ def help_command(message):
 
 
 @bot.message_handler(commands=['on'])
+@authorized_only
 def turn_on(message):
     chat_id = message.chat.id
     command = message.text.split(' ', 1)
@@ -53,6 +71,7 @@ def turn_on(message):
         bot.send_message(chat_id, 'Usage: /on <SERVICE_NAME>')
 
 @bot.message_handler(commands=['off'])
+@authorized_only
 def turn_off(message):
     chat_id = message.chat.id
     command = message.text.split(' ', 1)
@@ -69,6 +88,7 @@ def turn_off(message):
         bot.send_message(chat_id, 'Usage: /off <SERVICE_NAME>')
         
 @bot.message_handler(commands=['boot'])
+@authorized_only
 def turn_off(message):
     chat_id = message.chat.id
     command = message.text.split(' ', 1)
@@ -85,6 +105,7 @@ def turn_off(message):
         bot.send_message(chat_id, 'Usage: /boot <SERVICE_NAME>')       
 
 @bot.message_handler(commands=['startscript'])
+@authorized_only
 def start_script(message):
     chat_id = message.chat.id
     command = message.text.split(' ', 1)
