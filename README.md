@@ -19,6 +19,8 @@ Visit the following URL in your web browser, replacing <YOUR_BOT_TOKEN> with the
 bash
 `https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates`
 Look for the "chat" object within the response. The "id" field in that object is your chat ID.
+3. Get your TELEGRAM USER ID (This is very important to ensure you are the only user authorized to use the bot
+Access https://t.me/userinfobot and this will return your TELEGRAM_USER_ID
 
 **Repository Installation:**
 1. Git Clone the Repository: `git clone https://github.com/jvxis/nr-tools.git`
@@ -69,7 +71,7 @@ This is a telegram bot to start, stop and restart Umbrel services. You can use /
 
 **How to Setup:**
 1. open the code: `cd nr-tools` and `nano service_on_off.py`
-2. Include your Bot Token to receive telegram messages
+2. Include your Bot Token and your Telegram user Id to receive telegram messages
 3. Replace /path_to_umbrel with your path to Umbrel directory`SCRIPT_PATH = "/path_to_umbrel/scripts/app"`
 4. Save the Script - CTRL + O
 5. Leave the editor - CTRL + X
