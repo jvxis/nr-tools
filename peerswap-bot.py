@@ -45,6 +45,7 @@ def authorized_only(func):
             func(message)
         else:
             bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
+    return wrapper
 
 def get_node_alias(pub_key):
     try:
