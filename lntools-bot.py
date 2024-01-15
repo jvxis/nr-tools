@@ -93,6 +93,9 @@ def get_lncli_utxos():
         utxos = data.get("utxos", [])
     except json.JSONDecodeError as e:
         print(f"Error decoding lncli output: {e}")
+
+    # Sort utxos based on amount_sat in reverse order
+    utxos = sorted(utxos, key=lambda x: x.get("amount_sat", 0), reverse=True)
     print(f"Utxos:{utxos}")
     return utxos
 
