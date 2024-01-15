@@ -307,7 +307,25 @@ def get_utxos():
                 utxos['outpoints'].append(outpoint)
 
     return utxos
+def get_lncli_utxos():
+    command = f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
+    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
+    output = output.decode("utf-8")
 
+    utxos = []
+
+    try:
+        data = json.loads(output)
+        utxos = data.get("utxos", [])
+    except json.JSONDecodeError as e:
+        print(f"Error decoding lncli output: {e}")
+    
+    # Sort utxos based on amount_sat in reverse order
+    utxos = sorted(utxos, key=lambda x: x.get("amount_sat", 0), reverse=True)
+    
+    print(f"Utxos:{utxos}")
+    return utxos
 # Calcula o tamanho da transação em vBytes
 def calculate_transaction_size(utxos_needed):
     inputs_size = utxos_needed * 57.5  # Cada UTXO é de 57.5 vBytes
@@ -317,9 +335,9 @@ def calculate_transaction_size(utxos_needed):
     return total_size
 
 def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
-    utxos_data = get_utxos()
+    utxos_data = get_lncli_utxos()
     channel_size = float(amount_input)
-    total = sum(utxos_data['amounts'])
+    total = sum(utxo["amount_sat"] for utxo in utxos_data)
     utxos_needed = 0
     amount_with_fees = channel_size
     related_outpoints = []
@@ -328,17 +346,18 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
         print(f"Não há UTXOs suficientes para abrir um canal de {channel_size} SATS. Total UTXOS: {total} SATS")
         return -1, 0, None
 
-    for utxo_amount, utxo_outpoint in zip(utxos_data['amounts'], utxos_data['outpoints']):
+    #for utxo_amount, utxo_outpoint in zip(utxos_data['amounts'], utxos_data['outpoints']):
+    for utxo in utxos_data:
         utxos_needed += 1
         transaction_size = calculate_transaction_size(utxos_needed)
         fee_cost = transaction_size * fee_per_vbyte
         amount_with_fees = channel_size + fee_cost
 
-        related_outpoints.append(utxo_outpoint)
+        related_outpoints.append(utxo['outpoint'])
 
-        if utxo_amount >= amount_with_fees:
+        if utxo['amount_sat'] >= amount_with_fees:
             break
-        channel_size -= utxo_amount
+        channel_size -= utxo['amount_sat']
 
     return utxos_needed, fee_cost, related_outpoints if related_outpoints else None
 
