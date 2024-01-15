@@ -11,7 +11,7 @@ password1="fc967730052bb3a437e4857....."
 rpc_url = f"http://{user1}:{password1}@127.0.0.1:7041"
 headers = {'content-type': 'application/json'}
 
-path_to_umbrel = "your_path_to_umbrel"
+path_to_umbrel = "your_path_to_umbrel" # Ex: /home/Your_User/umbrel/scripts/app
 
 # Prepare JSON-RPC request
 payload_getpegin = {
@@ -59,7 +59,7 @@ except ValueError:
 
 # Construct the command
 command = [
-        "/media/jvx/Umbrel-JV1/app",
+        f"{path_to_umbrel}",
         "compose",
         "lightning",
         "exec",
