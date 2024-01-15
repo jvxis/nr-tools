@@ -131,7 +131,7 @@ def confirm_channel_point_to_amboss(order_id, transaction):
 def get_channel_point(hash_to_find):
     def execute_lightning_command():
         command = [
-            f"{path_to_umbrel}/scripts/app",
+            f"{PATH_TO_UMBREL}/scripts/app",
             "compose",
             "lightning",
             "exec",
@@ -170,7 +170,7 @@ def get_channel_point(hash_to_find):
 def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
     # Format the command
     command = (
-        f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+        f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
         f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
         f"{formatted_outpoints} --local_amt={input_amount}"
     )
@@ -178,7 +178,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     
     # Option to not use the UTXOs
     #command = (
-    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
     #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
     #    f"--local_amt={input_amount}"
     #)
