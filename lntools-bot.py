@@ -25,6 +25,7 @@ ATTENTION_EMOJI = "⚠️"
 
 bot = telebot.TeleBot(TELEGRAM_BOT_TOKEN)
 print("Bot LNtools started")
+
 # Function to check if the user is authorized
 def is_authorized_user(user_id):
     return str(user_id) == TELEGRAM_USER_ID
@@ -38,49 +39,99 @@ def authorized_only(func):
             bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
 
     return wrapper
-    
-@bot.message_handler(commands=['start'])
-@authorized_only
-def start(message):
-    welcome_message = (
-        "Welcome to LNtools Bot!\n\nYou can use the /help command to see the list of available commands and their descriptions.\n"
-    )
-    bot.reply_to(message, welcome_message)
 
-
-@bot.message_handler(commands=['help'])
-@authorized_only
-def help_command(message):
-    help_text = (
-        "Available Commands:\n"
-        "/onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee\n"
-        "/pay <payment_request> - Pay a Lightning invoice\n"
-        "/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice\n"
-        "/bckliquidwallet - Backup Liquid wallet\n"
-        "/newaddress - Get a new onchain address\n"
-        "/sign <message> - Sign a message"
-    )
-    bot.reply_to(message, help_text)
-
-def get_utxos():
-    command = f"{BOS_PATH}bos utxos --confirmed"
+def connect_to_node(node_key_address):
+    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
+    print(f"Command:{command}")
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
-    utxos = {'amounts': [], 'outpoints': []}
 
-    if output:
-        lines = output.split('\n')
-        for line in lines:
-            if "amount:" in line:
-                amount = float(line.split()[1]) * 100000000
-                utxos['amounts'].append(amount)
-            if "outpoint:" in line:
-                outpoint = str(line.split()[1])
-                utxos['outpoints'].append(outpoint)
+    if process.returncode == 0:
+        print(f"Successfully connected to node {node_key_address}")
+        return process.returncode
+    else:
+        print(f"Error connecting to node {node_key_address}: {error}")
+        return process.returncode
 
-    return utxos
+
+def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
+    # Format the command
+    command = (
+        f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
+        f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
+        f"{formatted_outpoints} --local_amt={input_amount}"
+    )
+    print(f"UTXOs: {formatted_outpoints}")
     
+    # Option to not use the UTXOs
+    #command = (
+    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
+    #    f"--local_amt={input_amount}"
+    #)
+
+    try:
+        # Run the command and capture the output
+        print(f"Command: {command}")
+        result = subprocess.run(command, shell=True, check=True, capture_output=True)
+
+        # Print the command output
+        print("Command Output:", result.stdout.decode("utf-8"))
+
+        # Parse the JSON output
+        try:
+            output_json = json.loads(result.stdout.decode("utf-8"))
+            funding_txid = output_json.get("funding_txid")
+            return funding_txid
+        except json.JSONDecodeError as json_error:
+            print(f"Error decoding JSON: {json_error}")
+            # Save the command and JSON error to a log file
+            log_content = f"Command: {command}\nJSON Decode Error: {json_error}\n"
+            return log_content
+
+    except subprocess.CalledProcessError as e:
+        # Handle command execution errors
+        print("Error executing command:", e)
+
+        # Save the command and error to a log file
+        log_content = f"Command: {command}\nError: {e}\n"
+        return log_content
+# Function Channel Open
+def open_channel(pubkey, size, fee_rate):
+    # get fastest fee
+
+    # Check UTXOS and Fee Cost
+    print("Getting UTXOs, Fee Cost and Outpoints to open the channel")
+    utxos_needed, fee_cost, related_outpoints = calculate_utxos_required_and_fees(size,fee_rate)
+    # Check if enough UTXOS
+    if utxos_needed == -1:
+        msg_open = f"There isn't enough confirmed Balance to open a {size} SATS channel"
+        print(msg_open)
+        return -1, msg_open 
+    # Good to open channel
+    formatted_outpoints = ' '.join([f'--utxo {outpoint}' for outpoint in related_outpoints])
+    print(f"Opening Channel: {pubkey}")
+    # Run function to open channel
+    funding_tx = execute_lnd_command(pubkey, fee_rate, formatted_outpoints, size)
+    if "Error" in funding_tx:
+        msg_open = f"Problem to execute the LNCLI command to open the channel. {funding_tx}"
+        print(msg_open)
+        return -3, msg_open
+    msg_open = f"Channel with {get_node_alias(pubkey)} | {pubkey} opened with funding transaction: {funding_tx} and Fee Cost: {fee_cost} sats"
+    print(msg_open)
+    return funding_tx, msg_open       
+
+
+def get_node_alias(pub_key):
+    try:
+        response = requests.get(f"https://mempool.space/api/v1/lightning/nodes/{pub_key}")
+        data = response.json()
+        return data.get('alias', '')
+    except Exception as e:
+        print(f"Error fetching node alias: {str(e)}")
+        return ''
+
 def get_lncli_utxos():
     command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -94,10 +145,31 @@ def get_lncli_utxos():
         utxos = data.get("utxos", [])
     except json.JSONDecodeError as e:
         print(f"Error decoding lncli output: {e}")
-
+    
     # Sort utxos based on amount_sat in reverse order
     utxos = sorted(utxos, key=lambda x: x.get("amount_sat", 0), reverse=True)
+    
     print(f"Utxos:{utxos}")
+    return utxos
+
+def get_utxos():
+    command = f"{BOS_PATH}bos utxos --confirmed"
+    process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    output, error = process.communicate()
+    output = output.decode("utf-8")
+    utxos = {'amounts': [], 'outpoints': []}
+    
+    if output:
+        print(output)
+        lines = output.split('\n')
+        for line in lines:
+            if "amount:" in line:
+                amount = float(line.split()[1]) * 100000000
+                utxos['amounts'].append(amount)
+            if "outpoint:" in line:
+                outpoint = str(line.split()[1])
+                utxos['outpoints'].append(outpoint)
+    
     return utxos
 
 # Calculate transaction size in vBytes
@@ -176,6 +248,22 @@ def send_long_message(chat_id, long_message):
         chunk = long_message[i:i+max_length]
         print(chunk)
         bot.send_message(chat_id, chunk)
+
+@bot.message_handler(commands=['help'])
+@authorized_only
+def help_command(message):
+    help_text = (
+        "Available Commands:\n"
+        "/onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee\n"
+        "/pay <payment_request> - Pay a Lightning invoice\n"
+        "/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice\n"
+        "/bckliquidwallet - Backup Liquid wallet\n"
+        "/newaddress - Get a new onchain address\n"
+        "/sign <message> - Sign a message\n"
+        "/connectpeer <peer address> - connect to a peer\n"
+        "/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS"
+    )
+    bot.reply_to(message, help_text)
                 
 @bot.message_handler(commands=['onchainfee'])
 @authorized_only
@@ -261,6 +349,42 @@ def invoice(message):
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount, message and expiration time in seconds after the /invoice command. Ex: /invoice 100000 node-services-payment 1000")
 
+@bot.message_handler(commands=["connectpeer"])
+@authorized_only
+def connect_peer(message):
+    try:
+        peer_address = message.text.split()[1]
+        connect = connect_to_node(peer_address)
+        if connect ==0:
+            print(f"Successfully connected to node {peer_address}")
+            bot.send_message(message.chat.id, text=f"Successfully connected to node {peer_address}")
+        
+        else:
+            print(f"Error connecting to node {peer_address}:")
+            bot.send_message(message.chat.id, text=f"Can't connect to node {peer_address}. Maybe it is already connected or off-line")
+    except IndexError:
+        bot.reply_to(message, "🙋‍ Please provide the command /connectpeer peer_address Ex: /connectpeer public_key@host")
+
+@bot.message_handler(commands=["openchannel"])
+@authorized_only
+def open_channelcmd(message):
+    try:
+        pub_key = message.text.split()[1]
+        size = int(message.text.split()[2])
+        fee_rate = int(message.text.split()[3])
+        funding_tx, msg_open = open_channel(pub_key,size,fee_rate)
+        #Open Channel
+        bot.reply_to(message.chat.id, text=f"Opening a {size} SATS channel with {pub_key} | {get_node_alias(pub_key)} at Fee Rate: {fee_rate} sats/vB")    
+        funding_tx, msg_open = open_channel(pub_key,size, fee_rate)
+        # Deal with  errors and show on Telegram
+        if funding_tx == -1 or funding_tx == -2 or funding_tx == -3:
+            bot.send_message(message.chat.id, text=msg_open)
+            return
+        # Send funding tx to Telegram
+        bot.send_message(message.chat.id, text=msg_open)
+    except IndexError:
+        bot.reply_to(message, "🙋‍ Please provide the command /openchannel public_key channel_size fee_rate")
+        
 @bot.message_handler(commands=['consolidator'])
 @authorized_only
 def consolidator(message):
@@ -301,7 +425,6 @@ def consolidator(message):
         bot.send_message(message.chat.id, text=f"This transaction will cost approximately: {fee_cost} sats")
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount fee-rate and btc address after the /consolidator command. Ex: /consolidator 1000000 40 bc1.....")
-
 
 @bot.message_handler(commands=['bckliquidwallet'])
 @authorized_only
@@ -347,7 +470,7 @@ def bckliquidwallet(message):
     except Exception as e:
         bot.reply_to(message, f"❌ Error: {str(e)}")
         print(f"❌ Error: {str(e)}")
-
+        
 @bot.message_handler(commands=['newaddress'])
 @authorized_only
 def generate_new_address(message):
@@ -365,9 +488,8 @@ def generate_new_address(message):
             bot.reply_to(message, "Error: Unable to retrieve new address.")
     except subprocess.CalledProcessError as e:
         bot.reply_to(message, f"Error: {e}")
-
-
-@bot.message_handler(commands=['sign'])
+        
+bot.message_handler(commands=['sign'])
 @authorized_only
 def sign_message(message):
     try:
@@ -381,11 +503,10 @@ def sign_message(message):
         signed_message = data.get("signature", [])
 
         bot.send_message(chat_id, f"Message Signed:")
-        bot.send_message(chat_id, f"```{signed_message}```", parse_mode='Markdown')
+        bot.send_message(chat_id, f"```\n{signed_message}\n```", parse_mode='Markdown')
 
     except IndexError:
         bot.reply_to(message, "Please provide the message to sign. Ex: /sign <message>")
-
-
+        
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
