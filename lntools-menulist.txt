@@ -7,3 +7,4 @@ pay - <payment_request> | Pay a Lightning invoice
 invoice - <amount> <message> <expiration_seconds> | Create a Lightning invoice
 bckliquidwallet - Backup Liquid wallet
 newaddress - Get a new onchain address
+sign - <message> | Sign a message
