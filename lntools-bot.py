@@ -366,5 +366,25 @@ def generate_new_address(message):
         bot.reply_to(message, f"Error: {e}")
 
 
+@bot.message_handler(commands=['sign'])
+@authorized_only
+def sign_message(message):
+    try:
+        chat_id = message.chat.id
+        command = message.text.split(' ', 1)
+        message_sign = command[1]
+
+        sign = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli signmessage {message_sign}"
+        output = subprocess.check_output(sign, shell=True, universal_newlines=True)
+        data = json.loads(output)
+        signed_message = data.get("signature", [])
+
+        bot.send_message(chat_id, f"Message Signed:")
+        bot.send_message(chat_id, f"```{signed_message}```", parse_mode='Markdown')
+
+    except IndexError:
+        bot.reply_to(message, "Please provide the message to sign. Ex: /sign <message>")
+
+
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
