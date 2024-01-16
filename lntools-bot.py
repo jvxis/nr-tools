@@ -58,6 +58,7 @@ def help_command(message):
         "/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice\n"
         "/bckliquidwallet - Backup Liquid wallet\n"
         "/newaddress - Get a new onchain address\n"
+        "/sign <message> - Sign a message"
     )
     bot.reply_to(message, help_text)
 
