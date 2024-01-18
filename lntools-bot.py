@@ -4,6 +4,7 @@ import requests
 import json
 import shutil
 import sys
+from io import StringIO
 sys.path.append('/path/to/nr-tools/')
 import os
 from config import *
@@ -261,7 +262,8 @@ def help_command(message):
         "/newaddress - Get a new onchain address\n"
         "/sign <message> - Sign a message\n"
         "/connectpeer <peer address> - connect to a peer\n"
-        "/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS"
+        "/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS\n"
+        "/lndlogs <optional all docker logs parameters> and | grep something - Shows LND logs"
     )
     bot.reply_to(message, help_text)
                 
@@ -507,6 +509,45 @@ def sign_message(message):
 
     except IndexError:
         bot.reply_to(message, "Please provide the message to sign. Ex: /sign <message>")
+        
+@bot.message_handler(commands=['lndlogs'])
+@authorized_only
+def lndlogs(message):
+    chat_id = message.chat.id
+    # Get the parameters after the first space
+    command_args = message.text.split()[1:]
+
+    # Check if any parameters are provided
+    if not command_args:
+        bot.reply_to(message, "Logs are usually too long. Please provide parameters for the /lndlogs command.")
+        return
+
+    # Combine parameters into a command
+    docker_command = "docker logs lightning_lnd_1 " + " ".join(command_args)
+    print(f"Docker command: {docker_command}\n")
+
+    try:
+        # Execute the docker logs command
+        result = subprocess.run(docker_command, capture_output=True, text=True, shell=True)
+        print(result)
+        # Check the exit status
+        if result.returncode == 0:
+            # Create a file with the output content
+            output_file = StringIO(result.stdout)
+            output_file.name = f"lnd-log-{command_args}.txt"
+
+            # Send the file as a document with plain text format
+            bot.send_document(chat_id, output_file, caption=f"Output from {docker_command} command")
+        else:
+            # Print a message indicating no matches
+            bot.send_message(chat_id, f"No matching lines found in the logs.")
+    except subprocess.CalledProcessError as e:
+        # Handle errors
+        error_message = f"Command returned non-zero exit status {e.returncode}."
+        if e.stderr:
+            error_message += f"\nError message: {e.stderr.strip()}"
+
+        bot.send_message(chat_id, f"Error executing command:\n{error_message}")
         
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
