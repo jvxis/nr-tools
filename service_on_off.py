@@ -29,7 +29,7 @@ def authorized_only(func):
         if is_authorized_user(message.from_user.id):
             func(message)
         else:
-        bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
+            bot.reply_to(message, "⛔️ You are not authorized to execute this command.")
 
     return wrapper
 
