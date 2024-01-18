@@ -3,7 +3,7 @@ import telebot
 import json
 from telebot import types
 import subprocess
-import schedules
+import schedule
 import os
 import time
 
