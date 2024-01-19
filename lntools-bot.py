@@ -204,32 +204,38 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
 
     return utxos_needed, fee_cost
 
-def make_invoice(amount_to_pay, message, expire):
-    url = LNBITS_URL
-    headers = {
-        "X-Api-Key": LNBITS_INVOICE_KEY,
-        "Content-type": "application/json"
-    }
-
-    data = {
-        "out": False,
-        "amount": amount_to_pay,
-        "memo": message,
-        "expiry": expire
-    }
-
-    # Ensure the payload is formatted as JSON
-    payload = json.dumps(data)
+def execute_lncli_addinvoice(amt, memo, expiry):
+    # Command to be executed
+    command = [
+        f"{PATH_TO_UMBREL}/scripts/app",
+        "compose",
+        "lightning",
+        "exec",
+        "lnd",
+        "lncli",
+        "addinvoice",
+        "--memo", memo,
+        "--amt", amt,
+        "--expiry", expiry
+    ]
 
     try:
-        # Make the POST request
-        response = requests.post(url, data=payload, headers=headers)
-        response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
+        # Execute the command and capture the output
+        result = subprocess.check_output(command, text=True)
+        
+        # Parse the JSON output
+        output_json = json.loads(result)
 
-        return response.text
+        # Extract the required values
+        r_hash = output_json.get("r_hash", "")
+        payment_request = output_json.get("payment_request", "")
 
-    except requests.exceptions.RequestException as e:
-        return f"{ERROR_EMOJI} An error occurred while processing the request: {str(e)}"
+        return r_hash, payment_request
+
+    except subprocess.CalledProcessError as e:
+        # Handle any errors that occur during command execution
+        print(f"Error executing command: {e}")
+        return f"Error executing command: {e}", None
 
 # Function to format the response content with emojis
 def format_response(response_content):
@@ -263,7 +269,7 @@ def help_command(message):
         "/sign <message> - Sign a message\n"
         "/connectpeer <peer address> - connect to a peer\n"
         "/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS\n"
-        "/lndlogs <optional all docker logs parameters> and | grep something - Shows LND logs"
+        "/lndlog <optional all docker logs parameters> and | grep something - Shows LND logs"
     )
     bot.reply_to(message, help_text)
                 
@@ -336,17 +342,21 @@ def pay_invoice(message):
 @authorized_only
 def invoice(message):
     try:
-        input_amount = float(message.text.split()[1])
+        input_amount = message.text.split()[1]
         memo = message.text.split()[2]
-        time = int(message.text.split()[3])
+        time = message.text.split()[3]
         
-        payment_response = make_invoice(input_amount, memo, time)
-        hash, request = format_response(payment_response)
-        bot.send_message(message.chat.id, f"{PAY_EMOJI} Total Invoice: {input_amount} sats :\n{memo}")
-        bot.send_message(message.chat.id, hash)
-        bot.send_message(message.chat.id, f"{MONEY_EMOJI} Invoice:")
-        bot.send_message(message.chat.id, f"```\n{request}\n```", parse_mode='Markdown')
-        bot.send_message(message.chat.id, f"{ATTENTION_EMOJI} This invoice will expire in {(time/3600):.2f} hours")
+        #payment_response = make_invoice(input_amount, memo, time)
+        hash, request = execute_lncli_addinvoice(input_amount, memo, time)
+        if "Error" in hash:
+            bot.send_message(message.chat.id, f"{ERROR_EMOJI}  {hash}")
+        else:
+        #hash, request = format_response(payment_response)
+            bot.send_message(message.chat.id, f"{PAY_EMOJI} Total Invoice: {input_amount} sats :\n{memo}")
+            bot.send_message(message.chat.id, hash)
+            bot.send_message(message.chat.id, f"{MONEY_EMOJI} Invoice:")
+            bot.send_message(message.chat.id, f"```\n{request}\n```", parse_mode='Markdown')
+            bot.send_message(message.chat.id, f"{ATTENTION_EMOJI} This invoice will expire in {(int(time)/3600):.2f} hours")
        
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount, message and expiration time in seconds after the /invoice command. Ex: /invoice 100000 node-services-payment 1000")
@@ -509,7 +519,7 @@ def sign_message(message):
 
     except IndexError:
         bot.reply_to(message, "Please provide the message to sign. Ex: /sign <message>")
-        
+
 @bot.message_handler(commands=['lndlogs'])
 @authorized_only
 def lndlogs(message):
@@ -548,6 +558,7 @@ def lndlogs(message):
             error_message += f"\nError message: {e.stderr.strip()}"
 
         bot.send_message(chat_id, f"Error executing command:\n{error_message}")
-        
+  
+
 # Polling loop to keep the bot running
 bot.polling(none_stop=True, interval=0, timeout=20)
