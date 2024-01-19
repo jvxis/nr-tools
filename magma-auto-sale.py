@@ -27,67 +27,34 @@ log_file_path2 = "amboss_open_command.log"
 bot = telebot.TeleBot(TOKEN)
 print("Amboss Channel Open Bot Started")
 
-# Deprecated LNBITS Function
-# # Function to generate an invoice
-# def invoice(amount_to_pay,order_id):
-#     url = "http://jvx-gtr.local:3007/api/v1/payments"
-#     headers = {
-#         "X-Api-Key": "40ffd7b9a66f49659637f7f86fc0b017",
-#         "Content-type": "application/json"
-#     }
+def invoice(amount_to_pay,order_id):
+    url = LNBITS URL
+    headers = {
+        "X-Api-Key": LNBITS_INVOICE_KEY,
+        "Content-type": "application/json"
+    }
 
-#     data = {
-#         "out": False,
-#         "amount": amount_to_pay,
-#         "memo": f"Amboss Channel Sale - Order ID: {order_id}",
-#         "expiry": EXPIRE
-#     }
+    data = {
+        "out": False,
+        "amount": amount_to_pay,
+        "memo": f"Amboss Channel Sale - Order ID: {order_id}",
+        "expiry": EXPIRE
+    }
 
-#     # Ensure the payload is formatted as JSON
-#     payload = json.dumps(data)
-
-#     try:
-#         # Make the POST request
-#         response = requests.post(url, data=payload, headers=headers)
-#         response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
-
-#         return response.json()
-
-#     except requests.exceptions.RequestException as e:
-#         return None
-
-def execute_lncli_addinvoice(amt, memo, expiry):
-    # Command to be executed
-    command = [
-        f"{path_to_umbrel}/scripts/app",
-        "compose",
-        "lightning",
-        "exec",
-        "lnd",
-        "lncli",
-        "addinvoice",
-        "--memo", memo,
-        "--amt", amt,
-        "--expiry", expiry
-    ]
+    # Ensure the payload is formatted as JSON
+    payload = json.dumps(data)
 
     try:
-        # Execute the command and capture the output
-        result = subprocess.check_output(command, text=True)
-        
-        # Parse the JSON output
-        output_json = json.loads(result)
+        # Make the POST request
+        response = requests.post(url, data=payload, headers=headers)
+        response.raise_for_status()  # Raise an exception for 4xx and 5xx status codes
 
-        # Extract the required values
-        r_hash = output_json.get("r_hash", "")
-        payment_request = output_json.get("payment_request", "")
+        return response.json()
 
-        return r_hash, payment_request
+    except requests.exceptions.RequestException as e:
+        return None
 
-    except subprocess.CalledProcessError as e:
-        # Handle any errors that occur during command execution
-        print(f"Error executing command: {e}")
-        return f"Error executing command: {e}", None
+
     
 # Function to format the response content with emojis
 def format_response(response_content):
@@ -252,6 +219,41 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
             log_file.write(log_content)
 
         return None
+# def execute_lncli_addinvoice(amt, memo, expiry):
+# # Command to be executed
+#     command = (
+#         f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli addinvoice "
+#         f"--memo '{memo}' --amt {amt} --expiry {expiry}"
+#     )
+
+#     try:
+#         # Execute the command and capture the output
+#         result = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+#         output, error = result.communicate()
+#         output = output.decode("utf-8")
+#         error = error.decode("utf-8")
+
+#         # Print the command output and error
+#         print("Command Output:", output)
+#         print("Command Error:", error)
+
+#         # Try to parse the JSON output
+#         try:
+#             output_json = json.loads(output)
+#             # Extract the required values
+#             r_hash = output_json.get("r_hash", "")
+#             payment_request = output_json.get("payment_request", "")
+#             return r_hash, payment_request
+
+#         except json.JSONDecodeError as json_error:
+#             # If not a valid JSON response, handle accordingly
+#             print(f"Error decoding JSON: {json_error}")
+#             return None, None
+
+    except subprocess.CalledProcessError as e:
+        # Handle any errors that occur during command execution
+        print(f"Error executing command: {e}")
+        return None, None
 
 def get_fast_fee():
     response = requests.get(API_MEMPOOL)
@@ -543,30 +545,30 @@ def send_telegram_message(message):
 
         # Call the invoice function
         bot.send_message(message.chat.id, text=f"Generating Invoice of {valid_channel_opening_offer['seller_invoice_amount']} sats...")
-        invoice_hash, invoice_request = execute_lncli_addinvoice(valid_channel_opening_offer['seller_invoice_amount'],f"Magma Channel Sale Order ID:{valid_channel_opening_offer['id']}", EXPIRE)
+        #invoice_hash, invoice_request = execute_lncli_addinvoice(valid_channel_opening_offer['seller_invoice_amount'],f"Magma Channel Sale Order ID:{valid_channel_opening_offer['id']}", str(EXPIRE))
         #Deprecated LNBITS Function
-        #invoice_result = invoice(valid_channel_opening_offer['seller_invoice_amount'],valid_channel_opening_offer['id'])
-        #if invoice_result is None:
-           # print("Error generating invoice, check if your LNBITS is running")
-           # bot.send_message(message.chat.id, text="Error generating invoice, check if your LNBITS is running")
-           # return
-        if "Error" in invoice_hash:
-            print(invoice_hash)
-            bot.send_message(message.chat.id, text="invoice_hash")
-            return
+        invoice_result = invoice(valid_channel_opening_offer['seller_invoice_amount'],valid_channel_opening_offer['id'])
+        if invoice_result is None:
+           print("Error generating invoice, check if your LNBITS is running")
+           bot.send_message(message.chat.id, text="Error generating invoice, check if your LNBITS is running")
+           return
+        # if "Error" in invoice_hash:
+        #     print(invoice_hash)
+        #     bot.send_message(message.chat.id, text="invoice_hash")
+        #     return
 
         # Print the invoice result for debugging
-        print("Invoice Result:", invoice_request)
+        print("Invoice Result:", invoice_result)
 
         # Send the payment_request content to Telegram
-        #formatted_response = format_response(invoice_result)
-        #bot.send_message(message.chat.id, text=formatted_response)
-        bot.send_message(message.chat.id, text=invoice_request)
+        formatted_response = format_response(invoice_result)
+        bot.send_message(message.chat.id, text=formatted_response)
+        #bot.send_message(message.chat.id, text=invoice_request)
         
         # Accept the order
         bot.send_message(message.chat.id, text=f"Accepting Order: {valid_channel_opening_offer['id']}")
-        #accept_result = accept_order(valid_channel_opening_offer['id'], invoice_result['payment_request'])
-        accept_result = accept_order(valid_channel_opening_offer['id'], invoice_request)
+        accept_result = accept_order(valid_channel_opening_offer['id'], invoice_result['payment_request'])
+        #accept_result = accept_order(valid_channel_opening_offer['id'], invoice_request)
         print("Order Acceptance Result:", accept_result)
         bot.send_message(message.chat.id, text=f"Order Acceptance Result: {accept_result}")
     
