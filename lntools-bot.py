@@ -73,30 +73,40 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     #)
 
     try:
-        # Run the command and capture the output
+        # Run the command and capture both stdout and stderr in real-time
         print(f"Command: {command}")
-        result = subprocess.run(command, shell=True, check=True, capture_output=True)
+        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-        # Print the command output
-        print("Command Output:", result.stdout.decode("utf-8"))
-
+        
+        line = process.stdout.readline()
+        line = line.decode("utf-8").strip()
+        combined_output, error = process.communicate()
+        combined_output = combined_output.decode("utf-8")
+        if "error" in str(line):
+            log_content = f"Error: {str(line)}"
+            
+            return log_content
+            
         # Parse the JSON output
         try:
-            output_json = json.loads(result.stdout.decode("utf-8"))
+            output_json = json.loads(combined_output)
             funding_txid = output_json.get("funding_txid")
             return funding_txid
         except json.JSONDecodeError as json_error:
             print(f"Error decoding JSON: {json_error}")
+
             # Save the command and JSON error to a log file
             log_content = f"Command: {command}\nJSON Decode Error: {json_error}\n"
+            
             return log_content
 
     except subprocess.CalledProcessError as e:
         # Handle command execution errors
-        print("Error executing command:", e)
+        print(f"Error executing command: {e}")
 
         # Save the command and error to a log file
         log_content = f"Command: {command}\nError: {e}\n"
+        
         return log_content
 # Function Channel Open
 def open_channel(pubkey, size, fee_rate):
@@ -187,22 +197,27 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
     total = sum(utxo["amount_sat"] for utxo in utxos)
     utxos_needed = 0
     amount_with_fees = amount_input
+    related_outpoints = []
     print(f"Total UTXOS: {total} Sats")
     print(f"Amount: {amount_input} Sats")
+    
     if total < amount_input:
-        return -1, 0
+        return -1, 0, None
 
+    #for utxo_amount, utxo_outpoint in zip(utxos_data['amounts'], utxos_data['outpoints']):
     for utxo in utxos:
         utxos_needed += 1
         transaction_size = calculate_transaction_size(utxos_needed)
         fee_cost = transaction_size * fee_per_vbyte
         amount_with_fees = amount_input + fee_cost
 
-        if utxo["amount_sat"] >= amount_with_fees:
-            break
-        amount_input -= utxo["amount_sat"]
+        related_outpoints.append(utxo['outpoint'])
 
-    return utxos_needed, fee_cost
+        if utxo['amount_sat'] >= amount_with_fees:
+            break
+        channel_size -= utxo['amount_sat']
+
+    return utxos_needed, fee_cost,related_outpoints if related_outpoints else None
 
 def execute_lncli_addinvoice(amt, memo, expiry):
     # Command to be executed
@@ -386,7 +401,7 @@ def open_channelcmd(message):
         fee_rate = int(message.text.split()[3])
         funding_tx, msg_open = open_channel(pub_key,size,fee_rate)
         #Open Channel
-        bot.reply_to(message.chat.id, text=f"Opening a {size} SATS channel with {pub_key} | {get_node_alias(pub_key)} at Fee Rate: {fee_rate} sats/vB")    
+        bot.send_message(message.chat.id, text=f"Opening a {size} SATS channel with {pub_key} | {get_node_alias(pub_key)} at Fee Rate: {fee_rate} sats/vB")    
         funding_tx, msg_open = open_channel(pub_key,size, fee_rate)
         # Deal with  errors and show on Telegram
         if funding_tx == -1 or funding_tx == -2 or funding_tx == -3:
@@ -395,7 +410,7 @@ def open_channelcmd(message):
         # Send funding tx to Telegram
         bot.send_message(message.chat.id, text=msg_open)
     except IndexError:
-        bot.reply_to(message, "🙋‍ Please provide the command /openchannel public_key channel_size fee_rate")
+        bot.send_message(message.chat.id, "🙋‍ Please provide the command /openchannel public_key channel_size fee_rate")
         
 @bot.message_handler(commands=['consolidator'])
 @authorized_only
