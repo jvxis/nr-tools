@@ -192,23 +192,14 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     try:
         # Run the command and capture the output
         print(f"Command: {command}")
-        process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        result = subprocess.run(command, shell=True, check=True, capture_output=True)
 
-        
-        line = process.stdout.readline()
-        line = line.decode("utf-8").strip()
-        combined_output, error = process.communicate()
-        combined_output = combined_output.decode("utf-8")
-        if "error" in str(line):
-            log_content = f"Error: {str(line)}"
-            log_file_path = "amboss_open_command.log"
-            with open(log_file_path, "w") as log_file:
-                log_file.write(log_content)
-            return log_content
+        # Print the command output
+        print("Command Output:", result.stdout.decode("utf-8"))
 
         # Parse the JSON output
         try:
-            output_json = json.loads(combined_output)
+            output_json = json.loads(result.stdout.decode("utf-8"))
             funding_txid = output_json.get("funding_txid")
             return funding_txid
         except json.JSONDecodeError as json_error:
@@ -220,7 +211,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
             with open(log_file_path, "w") as log_file:
                 log_file.write(log_content)
 
-            return log_content
+            return None
 
     except subprocess.CalledProcessError as e:
         # Handle command execution errors
@@ -232,7 +223,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
         with open(log_file_path, "w") as log_file:
             log_file.write(log_content)
 
-        return log_content
+        return None
 
 
 def get_fast_fee():
@@ -478,8 +469,8 @@ def open_channel(pubkey, size, invoice):
         print(f"Opening Channel: {pubkey}")
         # Run function to open channel
         funding_tx = execute_lnd_command(pubkey, fee_rate, formatted_outpoints, size)
-        if "Error" in funding_tx:
-            msg_open = f"Problem to execute the LNCLI command to open the channel.\n{funding_tx}\nPlease check the Log Files"
+        if funding_tx is None:
+            msg_open = f"Problem to execute the LNCLI command to open the channel. Please check the Log Files"
             print(msg_open)
             return -3, msg_open
         msg_open = f"Channel opened with funding transaction: {funding_tx}"
