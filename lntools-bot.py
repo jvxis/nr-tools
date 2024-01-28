@@ -41,6 +41,37 @@ def authorized_only(func):
 
     return wrapper
 
+def send_sats(ln_address, amount, message, peer):
+
+    # Validate the amount as a number
+    try:
+        amount = int(amount)
+    except ValueError:
+        msg = ("Invalid amount. Please enter a valid number.")
+        print(msg)
+        return msg
+        
+
+    # Build the command with user input
+    if peer is not None:
+        comando = f"{BOS_PATH}bos send {ln_address} --amount {amount} --message {message} --max-fee-rate 2000 --out {peer}"
+    else:
+        comando = f"{BOS_PATH}bos send {ln_address} --amount {amount} --message {message} --max-fee-rate 2000"
+
+    print(f"Executing command: {comando}\n")
+    output = subprocess.run(comando, shell=True, capture_output=True, text=True)
+
+    # Check if the output contains a success message
+    if "success" in output.stdout:
+        msg = f"{SUCCESS_EMOJI} Transaction successful. {amount} sats sent to {ln_address}\n{output.stdout}\n"
+        print(msg)
+        
+    else:
+        msg = f"{ERROR_EMOJI} Transaction failed! {output.stderr}. Please try again.\n"
+        print(msg)
+    return msg
+
+
 def connect_to_node(node_key_address):
     command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
     print(f"Command:{command}")
@@ -125,8 +156,8 @@ def open_channel(pubkey, size, fee_rate):
     print(f"Opening Channel: {pubkey}")
     # Run function to open channel
     funding_tx = execute_lnd_command(pubkey, fee_rate, formatted_outpoints, size)
-    if "Error" in funding_tx:
-        msg_open = f"Problem to execute the LNCLI command to open the channel. {funding_tx}"
+    if funding_tx is None:
+        msg_open = f"Problem to execute the LNCLI command to open the channel."
         print(msg_open)
         return -3, msg_open
     msg_open = f"Channel with {get_node_alias(pubkey)} | {pubkey} opened with funding transaction: {funding_tx} and Fee Cost: {fee_cost} sats"
@@ -284,7 +315,8 @@ def help_command(message):
         "/sign <message> - Sign a message\n"
         "/connectpeer <peer address> - connect to a peer\n"
         "/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS\n"
-        "/lndlog <optional all docker logs parameters> and | grep something - Shows LND logs"
+        "/lndlog <optional all docker logs parameters> and | grep something - Shows LND logs\n"
+        "/sendsats <lnaddress> <amount> <memo> <peer> (optional) - send sats to a lnaddress"
     )
     bot.reply_to(message, help_text)
                 
@@ -295,7 +327,7 @@ def onchain_fee(message):
         input_amount = float(message.text.split()[1])
         fee_per_vbyte = float(message.text.split()[2])
 
-        utxos_needed, onchain_fee_cost = calculate_utxos_required_and_fees(input_amount, fee_per_vbyte)
+        utxos_needed, onchain_fee_cost, related_outpoints = calculate_utxos_required_and_fees(input_amount, fee_per_vbyte)
 
         if utxos_needed >= 0:
             formatted_input_amount = f"{input_amount:,.0f}".replace(",", ".")
@@ -310,6 +342,26 @@ def onchain_fee(message):
             bot.reply_to(message, "🙈 Not enough UTXOs available.")
     except IndexError:
         bot.reply_to(message, "🙋‍ Please provide the amount and fee per vByte after the /onchain-fee command. Ex: /onchain-fee 4000000 74")
+
+@bot.message_handler(commands=['sendsats'])
+@authorized_only
+def send_sats_lnaddress(message):
+    try:
+        lnaddress = message.text.split()[1]
+        amount = message.text.split()[2]
+        memo = message.text.split()[3]
+        
+        # Check if the user provided a peer, otherwise use a default value or handle it as needed
+        if len(message.text.split()) > 4:
+            peer = message.text.split()[4]
+        else:
+            peer = None  # You can set a default peer or handle it in your specific way
+        
+        output = send_sats(lnaddress,amount,memo,peer)
+        send_long_message(message.chat.id, output)
+        
+    except IndexError:
+        bot.reply_to(message, "🙋‍ Please provide the lnaddress amount message and peer (Pub Key or Alias) after the /sendsats command.")    
 
 @bot.message_handler(commands=['pay'])
 @authorized_only
@@ -329,24 +381,24 @@ def pay_invoice(message):
             print(f"Executing Command:{pay_invoice_cmd}\n\n")
             result = subprocess.run(pay_invoice_cmd, shell=True, capture_output=True, text=True)
             print(f"THIS IS THE RESULT: {result}\n")
-            if result.returncode == 1:
+            #
             # Capture both stdout and stderr
-                output = result.stdout.strip()
-                print(f"THIS IS THE OUTPUT: {output}\n")
-                bot.send_message(chat_id, "💸 Pay Result Output:\n")
-                if 'invoice expired' in output:
-                    bot.send_message(chat_id, "⚠️ Sorry This Invoice Expired\n")
-                elif 'invoice is already paid' in output:
-                    bot.send_message(chat_id, "❌ Sorry Invoice Already Paid\n")
-                elif 'Payment status: FAILED, reason: FAILURE_REASON_TIMEOUT' in output:
-                    bot.send_message(chat_id, "💤 Sorry Time out. Try again\n")
-                elif output is None and 'Payment status: SUCCEEDED' in result:
-                    bot.send_message(chat_id, "✅ Invoice Paid\n")
+            output = result.stdout.strip()
+            print(f"THIS IS THE OUTPUT: {output}\n")
+            bot.send_message(chat_id, "💸 Pay Result Output:\n")
+            if 'invoice expired' in output:
+                bot.send_message(chat_id, "⚠️ Sorry This Invoice Expired\n")
+            elif 'invoice is already paid' in output:
+                bot.send_message(chat_id, "❌ Sorry Invoice Already Paid\n")
+            elif 'Payment status: FAILED, reason: FAILURE_REASON_TIMEOUT' in output:
+                bot.send_message(chat_id, "💤 Sorry Time out. Try again\n")
+            else:
+                bot.send_message(chat_id, "✅ Invoice Paid\n")
                 # Split the output into smaller chunks
-                if output is None:
-                    send_long_message(chat_id, result)
-                else:
-                    send_long_message(chat_id, output)
+            if output is None:
+                send_long_message(chat_id, result)
+            else:
+                send_long_message(chat_id, output)
         except Exception as e:
             bot.send_message(chat_id, f"❌ An error occurred: {e}")
     else:
