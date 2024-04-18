@@ -12,6 +12,8 @@ TELEGRAM_TOKEN = ''
 TELEGRAM_USER_ID = ""
 # ex /home/user/umbrel
 PATH_UMBREL = ""
+BOS_PATH = "full_path_to_your_BOS_binary"
+
 LN_CLI = f"{PATH_UMBREL}/scripts/app compose lightning exec lnd lncli listchannels"
 # Initialize the Telebot instance with your bot token
 bot = telebot.TeleBot(TELEGRAM_TOKEN)
@@ -116,12 +118,12 @@ def execute_transaction(chat_id, ln_address, amount, total_amount, interval_seco
             bot.send_message(chat_id, "🛑 Invalid amount. Please enter a valid number. Please start again.")
             break
         if peer is not None:
-            comando = f"bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate} --out {peer}"
+            comando = f"{BOS_PATH}/bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate} --out {peer}"
         else:
             if channel < len(filtered_channels):
-                comando = f"bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate} --out {get_node_alias(filtered_channels[channel]['remote_pubkey'])}"
+                comando = f"{BOS_PATH}/bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate} --out {get_node_alias(filtered_channels[channel]['remote_pubkey'])}"
             else:
-                comando = f"bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate}"
+                comando = f"{BOS_PATH}/bos send {ln_address} --amount {amount} --message {payment_message} --max-fee-rate {fee_rate}"
         bot.send_message(chat_id, f"▶️ Executing command: {comando}")
         output = subprocess.run(comando, shell=True, capture_output=True, text=True)
         if "success" in output.stdout:
