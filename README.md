@@ -28,7 +28,10 @@ Access https://t.me/userinfobot and this will return your TELEGRAM_USER_ID
 
 ##
 
- ## [htlcScan.sh](https://github.com/jvxis/nr-tools/blob/main/htlcScan.sh)
+## [lntools-bot.py]
+Control your Lightning Node using Telegram. You can use this tool to pay invoices, generate invoices...
+
+## [htlcScan.sh](https://github.com/jvxis/nr-tools/blob/main/htlcScan.sh)
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
 
 **How to Setup:**
