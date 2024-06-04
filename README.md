@@ -28,20 +28,53 @@ Access https://t.me/userinfobot and this will return your TELEGRAM_USER_ID
 
 ##
 
-## [lntools-bot.py]
+## [lntools-bot.py](https://github.com/jvxis/nr-tools/blob/main/lntools-bot.py)
 You can control your Lightning Node using Telegram. This tool allows you to pay invoices, generate invoices, send SATs, and much more.
 All available commands
 
         1. `/onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee`
         2. `/pay <payment_request> - Pay a Lightning invoice`
         3. `/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice`
-        4. `/bckliquidwallet - Backup Liquid wallet\`
-        5. `/newaddress - Get a new onchain address\`
+        4. `/bckliquidwallet - Backup Liquid wallet`
+        5. `/newaddress - Get a new onchain address`
         6. `/sign <message> - Sign a message`
         7. `/connectpeer <peer address> - connect to a peer`
         8. `/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS`
         9. `/lndlog <optional all docker logs parameters> and | grep something - Shows LND logs`
         10.`/sendsats <lnaddress> <amount> <memo> <peer> (optional) - send sats to a lnaddress`
+
+**Preparation**
+1. Get the `config.py` file https://github.com/jvxis/nr-tools/blob/main/config.py
+2. You need to change the lines to your configuration. `nano config.py`
+
+        PATH_TO_UMBREL = "YOUR-FULL-PATH-TO-UMBREL"
+        # Path to your elements wallets:
+        BCK_SOURCE_PATH = "/home/<user>/app-data/elements/data/liquidv1/wallets"
+        # Any external folder, external storage device where you want to place the backup:
+        BCK_DEST_PATH = "/mnt/backup/liquid"
+        # Chat ID: https://api.telegram.org/bot<YOUR_BOT_TOKEN>/getUpdates:
+        CHAT_ID="CHAT_ID"
+        NODE="NODE NAME"
+
+        # Please check if it is the right path for your BOS Binary:
+        FULL_PATH_BOS = "/home/<user>/.npm-global/lib/node_modules/balanceofsatoshis/"
+3. SAVE `CTRL+O` and Exit `CTRL+X`
+4. Now you need your telegram User ID, please keep it safe for you ONLY.
+5. Access https://t.me/userinfobot type `/start` and this will return your TELEGRAM_USER_ID
+
+**How to Setup**
+1. Open lntools-bot.py file `nano lntools-bot.py`
+2. Change Line 8 sys.path.append('/path/to/nr-tools/') to your path, if you cloned it on your user it should be `/home/user/nr-tools/`
+3. Change Lines:
+        .# Insert your Telegram bot token
+        .TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
+        .#Get it on https://t.me/userinfobot
+        .TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
+        .BOS_PATH = "path_to_your_BOS_binary"
+4. SAVE `CTRL+O` and EXIT `CTRL+X`
+
+Now you can run it `python3 lntools-bot.py`
+To run on the background you can use `screen` or setup it as a service: `screen -S lntools-bot python3 lntools-bot.py`
 
 ## [htlcScan.sh](https://github.com/jvxis/nr-tools/blob/main/htlcScan.sh)
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
