@@ -5,7 +5,8 @@
 
 All these tools are helping me a lot with my Lightning Node [Friendspool⚡🍻](http://amboss.space/c/friendspool)
 
-![image](https://github.com/emtll/nr-tools-emtll/assets/125327891/1fbfab00-e543-40cb-9609-911e1c2171df)
+![image](https://github.com/jvxis/nr-tools/assets/108929149/cb1f61ad-5acb-4aca-b21c-8b61ae487a10)
+
 
 ## Basic Setup
 **How to Setup Telegram Bot:**
