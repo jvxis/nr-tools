@@ -67,11 +67,11 @@ All available commands
 2. Change Line 8 sys.path.append('/path/to/nr-tools/') to your path, if you cloned it on your user it should be `/home/user/nr-tools/`
 3. Change Lines:
    
-        .# Insert your Telegram bot token
-        .TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
-        .#Get it on https://t.me/userinfobot
-        .TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
-        .BOS_PATH = "path_to_your_BOS_binary"
+        # Insert your Telegram bot token
+        TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
+        #Get it on https://t.me/userinfobot
+        TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
+        BOS_PATH = "path_to_your_BOS_binary"
 
 5. SAVE `CTRL+O` and EXIT `CTRL+X`
 
