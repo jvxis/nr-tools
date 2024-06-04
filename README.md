@@ -86,7 +86,7 @@ On your telegram app inside the BOT, you can type:
 - /on lightning - to turn on lnd
 - /off lightning - to turn off lnd
 - /boot lighting - to restart lnd
-The same can be done with any Umbrel Services. Like, bitcoin, lightning-terminal etc.
+The same can be done with any Umbrel Services. Like, bitcoin, circuit-breaker, tailscale, lightning-terminal etc.
 
 **Done!**
 
