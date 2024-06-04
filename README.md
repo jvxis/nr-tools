@@ -29,7 +29,19 @@ Access https://t.me/userinfobot and this will return your TELEGRAM_USER_ID
 ##
 
 ## [lntools-bot.py]
-Control your Lightning Node using Telegram. You can use this tool to pay invoices, generate invoices...
+You can control your Lightning Node using Telegram. This tool allows you to pay invoices, generate invoices, send SATs, and much more.
+All available commands
+
+        1. `/onchainfee <amount> <fee_per_vbyte> - Calculate on-chain fee`
+        2. `/pay <payment_request> - Pay a Lightning invoice`
+        3. `/invoice <amount> <message> <expiration_seconds> - Create a Lightning invoice`
+        4. `/bckliquidwallet - Backup Liquid wallet\`
+        5. `/newaddress - Get a new onchain address\`
+        6. `/sign <message> - Sign a message`
+        7. `/connectpeer <peer address> - connect to a peer`
+        8. `/openchannel <public key> <size in sats> <fee rate in sats/vB> - open a channel using UTXOS`
+        9. `/lndlog <optional all docker logs parameters> and | grep something - Shows LND logs`
+        10.`/sendsats <lnaddress> <amount> <memo> <peer> (optional) - send sats to a lnaddress`
 
 ## [htlcScan.sh](https://github.com/jvxis/nr-tools/blob/main/htlcScan.sh)
 This script checks for pending stuck htlcs that are near expiration height (< 13 blocks). It collects peers of critical htlc and disconnects / reconnects them to reestablish the htlc. Sometimes htlcs are being resolved before expiration this way and thus costly force closes can be prevented.
