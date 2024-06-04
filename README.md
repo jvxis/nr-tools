@@ -28,6 +28,35 @@ Access https://t.me/userinfobot and this will return your TELEGRAM_USER_ID
 
 ##
 
+## [swap-wallet21.py](https://github.com/jvxis/nr-tools/blob/main/swap-wallet21.py)
+This is the best and cheapest tool ever for swaps out (from Lightning to On-chain)
+Send SATS from your Lightning node directly to any Lightning Address. 
+You can send it out to your strike lightning address and send it back to your node to your on-chain wallet with no FEES.
+
+**Preparation**
+1. Get the `config.ini` file https://github.com/jvxis/nr-tools/blob/main/config.ini
+2. You need to change the lines to your configuration. `nano config.ini`
+
+        *[paths]*
+        # set your paths in case you cron-job it: $ whereis lncli & whereis pscli
+        # replace pathtoumbrel for your full path for umbrel directory
+        lncli_path = /pathtoumbrel/scripts/app compose lightning exec lnd lncli
+
+        *[system]*
+        # replace userpath for your full parent path to the .npm-global directory
+        full_path_bos = /userpath/.npm-global/lib/node_modules/balanceofsatoshis/bos
+
+3. SAVE `CTRL+O` and Exit `CTRL+X`
+
+**How to Run**
+1. You can run the code with the argument --local-balance <percentage>. Ex. `python3 swap-wallet21.py --local-balance 40`
+This will first consider the channels where the local liquidity is above 40%
+2. When you run the code, you should reply to some questions.
+   ![image](https://github.com/jvxis/nr-tools/assets/108929149/c5c8701e-c3ed-4cdc-98f5-b4b96162e4d0)
+3. You can choose a specific peer or leave it blank
+4. The program will end only after the total amount informed is transferred
+5. Tips: Use a wallet service with free withdrawals like Strike, and define a smaller amount per transaction.
+
 ## [lntools-bot.py](https://github.com/jvxis/nr-tools/blob/main/lntools-bot.py)
 You can control your Lightning Node using Telegram. This tool allows you to pay invoices, generate invoices, send SATs, and much more.
 All available commands
