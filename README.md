@@ -66,12 +66,14 @@ All available commands
 1. Open lntools-bot.py file `nano lntools-bot.py`
 2. Change Line 8 sys.path.append('/path/to/nr-tools/') to your path, if you cloned it on your user it should be `/home/user/nr-tools/`
 3. Change Lines:
+   
         .# Insert your Telegram bot token
         .TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
         .#Get it on https://t.me/userinfobot
         .TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
         .BOS_PATH = "path_to_your_BOS_binary"
-4. SAVE `CTRL+O` and EXIT `CTRL+X`
+
+5. SAVE `CTRL+O` and EXIT `CTRL+X`
 
 Now you can run it `python3 lntools-bot.py`
 To run on the background you can use `screen` or setup it as a service: `screen -S lntools-bot python3 lntools-bot.py`
