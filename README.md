@@ -195,23 +195,6 @@ Recommended to execute this code as a Linux Service or with screen: `screen -S s
 
 ##
 
-## [onchain-fee-calc.py](https://github.com/jvxis/nr-tools/blob/main/onchain-fee-calc.py)
-This code calculates how much on fees you will spend to send an on-chain transaction, considering your available UTXOs
-
-**Pre-reqs**
-You need Balance of Satoshis (BOS) installed
-
-**Usage:**
-1. Just run `python3 onchain-fee-calc.py`
-   
-![image](https://github.com/jvxis/nr-tools/assets/108929149/cae392b6-94a7-4663-a0d5-d2179f48f226)
-
-**Check out the Telegram Bot Version** `onchain-fee-calc-bot.py` You only need to replace it with your Bot Token.
-
-**Done!**
-
-##
-
 ## [utxo-consolidator.py](https://github.com/jvxis/nr-tools/blob/main/utxo-consolidator.py)
 Generates a BOS Fund command to consolidate your unspent UTXOS.
 
@@ -220,24 +203,6 @@ You need Balance of Satoshis (BOS) installed
 
 **Usage:**
 1. Just run `python3 utxo-consolidator.py`
-
-** This program only generates the command, so you should first check it, copy, paste and then RUN.
-
-**Done!**
-
-##
-
-## [openchannel-pro.py](https://github.com/jvxis/nr-tools/blob/main/openchannel-pro.py)
-This code, generates a channel open command considering only your unspent UTXOs needed. It helps to save sats during this process. So you can open your channels like a PRO!
-
-**How to Setup:**
-1. open the code: `cd nr-tools` and `openchannel-pro.py`
-2. Replace path_to_umbrel with your path to Umbrel directory`path_to_umbrel = "Your_Path_TO_Umbrel"`
-3. Save the Script - CTRL + O
-4. Leave the editor - CTRL + X
-
-**Usage:**
-1. Just run `python3 openchannel-pro.py`
 
 ** This program only generates the command, so you should first check it, copy, paste and then RUN.
 
@@ -268,6 +233,4 @@ You need Balance of Satoshis (BOS) installed
 
 **Done!**
 
-## [liquidpegin.py](https://github.com/jvxis/nr-tools/blob/main/liquidpegin.py) and [claimpegin.py](https://github.com/jvxis/nr-tools/blob/main/claimpegin.py)
-Use these 2 scripts to execute a Peg-in process from BTC to L-BTC using your own node ONLY!
-Tutorial By EMTLL: https://emtll.substack.com/p/como-emitir-btc-na-liquid-network
+
