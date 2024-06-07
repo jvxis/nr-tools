@@ -15,16 +15,19 @@ File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
    pip3 install pysensors
    ```
 ##Below is for a manual installation without `git clone`
-3. Get the files node-status.py, status.html, and message.txt
-4. Place node-status.py in your user directory `/home/user/nr-tools/nodestatus`
-5. Make a directory `templates`
+
+2. Get the files node-status.py, status.html, and message.txt
+
+3. Place node-status.py in your user directory `/home/user/nr-tools/nodestatus`
+   
+4. Make a directory `templates`
    ```bash
    sudo mkdir templates
    ```
-6. Move the files `status.html` and `message.txt` to the directory `/home/user/nr-tools/nodestatus/templates`
+5. Move the files `status.html` and `message.txt` to the directory `/home/user/nr-tools/nodestatus/templates`
 
-7. Edit the file `message.txt` and write anything you want
-8. Open the file `node-status.py` and fill out your configurations
+6. Edit the file `message.txt` and write anything you want
+7. Open the file `node-status.py` and fill out your configurations
    
    RUNNING_ENVIRONMENT = 'umbrel'  - Change to 'umbrel' for Umbrel systems or 'minibolt' for minibolt / raspibolt or any standalone
    
@@ -33,7 +36,7 @@ File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
    UMBREL_PATH = "/path/to/umbrel/scripts/"  - Path to Umbrel app for Umbrel users only
 
 ## Only for Bitcoin Core Running on Another machine
-8. Open the file `node-status.py` and fill out with your Bitcoind credentials
+7. Open the file `node-status.py` and fill out with your Bitcoind credentials
 
    BITCOIN_RPC_USER = 'YOUR_BITCOIN_RPCUSER'
 
@@ -43,11 +46,12 @@ File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
 
    BITCOIN_RPC_PORT = '8332'
 
-9. Save and Exit
+## Last Steps
+8. Save and Exit
 
-10. Execute:
+9. Execute:
    ```bash
    python3 node-status.py
    ```
-11. Now you can access `HTTP://your_machine_ip:5000/status`
+10. Now you can access `HTTP://your_machine_ip:5000/status`
    
