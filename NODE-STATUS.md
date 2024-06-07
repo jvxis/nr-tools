@@ -2,6 +2,9 @@
 ![image](https://github.com/jvxis/minibolt/assets/108929149/a520ff0c-7de4-4489-9657-413312cb995f)
 
 `First, be sure that you can execute the commands bitcoin-cli and lncli with your user. If you don't, you need to check GO Path.`
+
+File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
+
 ## Initial Setup
 1. Dependencies:
    Flask Library
