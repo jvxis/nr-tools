@@ -10,11 +10,15 @@ from collections import defaultdict
 # Configuration settings
 RUNNING_ENVIRONMENT = 'umbrel'  # Change to 'umbrel' for Umbrel systems or 'minibolt' for minibolt / raspibolt or any standalone
 RUNNING_BITCOIN = 'local'  # Change to 'external' if you are running Bitcoin Core on another machine
+# Only if your running Bitcoin Core on another machine
 BITCOIN_RPC_USER = 'YOUR_BITCOIN_RPCUSER'
 BITCOIN_RPC_PASSWORD = 'YOUR_BITCOIN_RPCPASS'
 BITCOIN_RPC_HOST = 'YOUR_BITCOIN_MACHINE_IP'  # Use 127.0.0.1 if Bitcoind is running on the same machine of the script installation
 BITCOIN_RPC_PORT = '8332'
+# for Umbrel Users
 UMBREL_PATH = "/path/to/umbrel/scripts/"  # Path to Umbrel app
+
+# message to display
 MESSAGE_FILE_PATH = '/home/<user>/nr-tools/nodestatus/templates/message.txt'  # Path to the message file
 
 app = Flask(__name__)
