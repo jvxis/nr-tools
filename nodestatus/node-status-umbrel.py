@@ -5,7 +5,7 @@ import requests
 
 # Please change 2 lines below for your config
 umbrel_path = "/path/to/umbrel/scripts/" #path to umbrel app
-MESSAGE_FILE_PATH = '/home/user/node-status/templates/message.txt'  # Path to the message file
+MESSAGE_FILE_PATH = '/home/user/nodestatus/templates/message.txt'  # Path to the message file
 
 
 app = Flask(__name__)
