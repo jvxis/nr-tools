@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <!-- Refresh page every 900 seconds (15 minutes) -->
+    <meta http-equiv="refresh" content="900">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <!-- Uncomment if you need to implement favicons on your nginx. You need to create a file for this site and a location /static
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="icon" type="image/png" sizes="16x16" href="{{ url_for('static', filename='favicon-16x16.png') }}">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+    <link rel="icon" type="image/png" sizes="32x32" href="{{ url_for('static', filename='favicon-32x32.png') }}"> -->
+    <title>{{ node_alias }} - Status</title>
+    <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.5.2/css/bootstrap.min.css">
+    <style>
+        body.dark {
+            background-color: #222;
+            color: #eee;
+        }
+        body.light {
+            background-color: #fff;
+            color: #333;
+        }
+        .container {
+            margin-top: 50px;
+        }
+        .green { color: #28a745; } /* Green */
+        .yellow { color: #ffc107; } /* Yellow */
+        .list-group-item {
+            background-color: #333;
+            border-color: #555;
+            color: #eee;
+        }
+        .table {
+            background-color: #333;
+            color: #eee;
+        }
+        .table th,
+        .table td {
+            border-color: #555;
+        }
+        .theme-switch {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            z-index: 9999;
+        }
+    </style>
+</head>
+<body class="dark">
+<div class="container">
+    <!-- Display current time -->
+    <div id="current-time" class="text-right"></div>
+    <div id="coingekko" class="center"><script src="https://widgets.coingecko.com/coingecko-coin-price-marquee-widget.js"></script>
+<coingecko-coin-price-marquee-widget  coin-ids="bitcoin,ethereum,dero" currency="usd" background-color="#333333" locale="pt" font-color="#f2f2f2"></coingecko-coin-price-marquee-widget></div>
+    <h1 class="mt-5">{{ node_alias }} - Node Status</h1>
+    <div class="alert alert-info" role="alert">{{ message }}</div>
+    <div class="alert alert-secondary" role="alert">
+        <strong>🚀 Fastest Fee: {{ fee_info.fastestFee }} sat/vB</strong> | 🚗 Half Hour Fee: {{ fee_info.halfHourFee }} sat/vB | 🛵 Hour Fee: {{ fee_info.hourFee }} sat/vB | 🚲 Economy Fee: {{ fee_info.economyFee }} sat/vB | 🐌 Minimum Fee: {{ fee_info.minimumFee }} sat/vB
+    </div>
+    <h2 class="mt-4">Bitcoin Core (bitcoind) - {{ bitcoind.bitcoind }}</h2>
+    <ul class="list-group">
+        <li class="list-group-item">
+            <strong>Sync Percentage:</strong>
+            <span class="{% if bitcoind.sync_percentage >= 99.99 %}green{% else %}yellow{% endif %}">
+                {{ '100.00' if bitcoind.sync_percentage >= 99.99 else '%.2f' % bitcoind.sync_percentage }}%
+            </span>
+        </li>
+        <li class="list-group-item"><strong>Version:</strong> {{ bitcoind.version }} - {{ bitcoind.subversion }}</li>
+        <li class="list-group-item"><strong>Chain:</strong> {{ bitcoind.chain }}</li>
+        <li class="list-group-item"><strong>Current Block Height:</strong> {{ bitcoind.current_block_height }}</li>
+        <li class="list-group-item"><strong>Number of Peers:</strong> {{ bitcoind.number_of_peers }}</li>
+        <li class="list-group-item"><strong>Pruned:</strong> {{ bitcoind.pruned }}</li>
+    </ul>
+
+    <h2 class="mt-4">Lightning Network Daemon (lnd)</h2>
+    <ul class="list-group">
+        <li class="list-group-item"><strong>LND Version:</strong> {{ lnd.node_lnd_version }}</li>
+        <li class="list-group-item"><strong>Public Key:</strong> {{ lnd.pub_key }}</li>
+        <li class="list-group-item"><strong>Sync Status:</strong> <strong>Chain:</strong><span class="{% if lnd.synced_to_chain %}green{% else %}yellow{% endif %}"> {{ lnd.synced_to_chain }}</span> | <strong>Graph:</strong><span class="{% if lnd.synced_to_graph  %}green{% else %}yellow{% endif %}"> {{ lnd.synced_to_graph }}</span></li>
+        <li class="list-group-item"><strong>Total Balance:</strong> {{ '{:,.0f}'.format(lnd.total_balance) }} satoshis | <strong>Wallet Balance:</strong> {{ '{:,.0f}'.format(lnd.wallet_balance) }} satoshis | <strong>Channels Balance:</strong> {{ '{:,.0f}'.format(lnd.channel_balance) }} satoshis</li>
+        <li class="list-group-item"><strong>Number of Channels:</strong> {{ lnd.number_of_channels }}</li>
+        <li class="list-group-item"><strong>Number of Active Channels:</strong> {{ lnd.num_active_channels }} | <strong>Number of Inactive Channels:</strong> {{ lnd.num_inactive_channels }} | <strong>Number of Pending Channels:</strong> {{ lnd.num_pending_channels }}</li>
+        <li class="list-group-item"><strong>Number of Peers:</strong> {{ lnd.number_of_peers }}</li>
+    </ul>
+
+    <h3 class="mt-4">Last 10 Payments</h3>
+    <table class="table table-striped">
+        <thead>
+        <tr>
+            <th>Payment Hash</th>
+            <th>Value (Satoshis)</th>
+            <th>Status</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for payment in lnd.last_10_payments %}
+        <tr>
+            <td>{{ payment.payment_hash }}</td>
+            <td>{{ payment.value_sat }}</td>
+            <td>{{ payment.status }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<button class="theme-switch btn btn-primary">Toggle Theme</button>
+
+<script>
+    const themeSwitch = document.querySelector('.theme-switch');
+    const body = document.querySelector('body');
+
+    themeSwitch.addEventListener('click', () => {
+        if (body.classList.contains('dark')) {
+            body.classList.remove('dark');
+            body.classList.add('light');
+        } else {
+            body.classList.remove('light');
+            body.classList.add('dark');
+        }
+    });
+
+// Function to update the time every second
+    function updateTime() {
+        const now = new Date();
+        const timeString = now.toLocaleTimeString();
+        document.getElementById('current-time').textContent = `Current Time: ${timeString}`;
+    }
+
+    // Update the time as soon as the page loads
+    updateTime();
+
+    // Set interval to update the time every second (1000 milliseconds)
+    setInterval(updateTime, 1000);
+
+</script>
+
+</body>
+</html>
