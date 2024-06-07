@@ -63,7 +63,9 @@
 
     <h2 class="mt-4">System Information</h2>
     <ul class="list-group">
-        <li class="list-group-item"><strong>CPU Usage:</strong> {{ system_info.cpu_usage }}% | <strong>Memory Usage:</strong> {{ system_info.memory_usage }}%</li>
+        <li class="list-group-item"><strong>CPU Usage:</strong> {{ system_info.cpu_usage }}% | <strong>CPU Temp:</strong> <span class="{% if system_info.cpu_temp > 85 %}red{% elif system_info.cpu_temp > 65 %}yellow{% else %}green{% endif %}">
+            {{ system_info.cpu_temp }} °C
+        </span> | <strong>Memory Usage:</strong> {{ system_info.memory_usage }}%</li>
         <li class="list-group-item"><strong>CPU Name:</strong> {{ system_info.cpu_info['brand_raw'] }} | Architecture:</strong> {{ system_info.cpu_info['arch'] }}</li>
     </ul>
     <h3 class="mt-4">Physical Disks Usage</h3>
