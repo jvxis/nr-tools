@@ -132,6 +132,14 @@ def get_physical_disks_usage():
 
     return disk_usage
 
+def get_cpu_temp():
+    temps = psutil.sensors_temperatures()
+    if 'coretemp' in temps:
+        for entry in temps['coretemp']:
+            if entry.label == 'Package id 0':
+                return entry.current
+    return 0
+
 def get_temperatures():
     temperatures = []
     try:
@@ -171,6 +179,7 @@ def status():
         "cpu_usage": get_cpu_usage(),
         "memory_usage": get_memory_usage(),
         "cpu_info": get_cpu_info(),
+        "cpu_temp": get_cpu_temp(),
         "physical_disks_usage": get_physical_disks_usage(),
         "temperatures": get_temperatures(),
         "sensor_temperatures": get_sensor_temperatures()
