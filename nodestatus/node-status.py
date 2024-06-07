@@ -7,7 +7,7 @@ BITCOIN_RPC_USER = 'YOUR_BITCOIN_RPCUSER'
 BITCOIN_RPC_PASSWORD = 'YOUR_BITCOIN_RPCPASS'
 BITCOIN_RPC_HOST = 'YOUR_BITCOIN_MACHINE_IP' # Use 127.0.0.1 if Bitcoind is running on the same machine of the script installation
 BITCOIN_RPC_PORT = '8332'
-MESSAGE_FILE_PATH = '/home/user/node-status/templates/message.txt'  # Path to the message file
+MESSAGE_FILE_PATH = '/home/user/nodestatus/templates/message.txt'  # Path to the message file
 
 
 app = Flask(__name__)
