@@ -7,24 +7,32 @@ File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
 
 ## Initial Setup
 1. Dependencies:
-   Flask Library
+   Python Libraries
    ```bash
    pip3 install flask
-   ```
-   Requests Library
-   ```bash
    pip3 install requests
+   pip3 install psutil py-cpuinfo
+   pip3 install pysensors
    ```
+##Below is for a manual installation without `git clone`
 3. Get the files node-status.py, status.html, and message.txt
-4. Place node-status.py in your user directory `/home/user/`
+4. Place node-status.py in your user directory `/home/user/nr-tools/nodestatus`
 5. Make a directory `templates`
    ```bash
    sudo mkdir templates
    ```
-6. Move the files `status.html` and `message.txt` to the directory `/home/user/templates`
+6. Move the files `status.html` and `message.txt` to the directory `/home/user/nr-tools/nodestatus/templates`
 
 7. Edit the file `message.txt` and write anything you want
+8. Open the file `node-status.py` and fill out your configurations
+   
+   RUNNING_ENVIRONMENT = 'umbrel'  - Change to 'umbrel' for Umbrel systems or 'minibolt' for minibolt / raspibolt or any standalone
+   
+   RUNNING_BITCOIN = 'local'  - Change to 'external' if you are running Bitcoin Core on another machine
 
+   UMBREL_PATH = "/path/to/umbrel/scripts/"  - Path to Umbrel app for Umbrel users only
+
+## Only for Bitcoin Core Running on Another machine
 8. Open the file `node-status.py` and fill out with your Bitcoind credentials
 
    BITCOIN_RPC_USER = 'YOUR_BITCOIN_RPCUSER'
