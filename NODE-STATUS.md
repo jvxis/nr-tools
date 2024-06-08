@@ -12,6 +12,8 @@ File in folder: https://github.com/jvxis/nr-tools/tree/main/nodestatus
    pip3 install flask
    pip3 install requests
    pip3 install psutil py-cpuinfo
+   sudo apt-get update
+   sudo apt-get install lm-sensors libsensors4-dev
    pip3 install pysensors
    ```
 ##Below is for a manual installation without `git clone`
