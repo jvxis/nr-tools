@@ -18,6 +18,9 @@ FOLDER_PATH = config['folder_path']
 LOG_FILE = config['log_file']
 DRIVE_FOLDER_ID = config['google_drive_folder_id']
 
+# Subfolder to exclude
+EXCLUDED_SUBFOLDER = os.path.join(FOLDER_PATH, 'logs')
+
 # Configure logging to log to both file and console
 logging.basicConfig(level=logging.INFO,
                     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -54,6 +57,10 @@ class Handler(FileSystemEventHandler):
             return
         if event.is_directory:
             return
+        # Skip events from the excluded subfolder
+        if event.src_path.startswith(EXCLUDED_SUBFOLDER):
+            logging.info(f"Skipped change in excluded folder: {event.src_path}")
+            return
         logging.info(f"Detected change: {event.event_type} - {event.src_path}")
         if self.timer:
             self.timer.cancel()
@@ -68,7 +75,12 @@ class Handler(FileSystemEventHandler):
             tar_filepath = os.path.join('/tmp', tar_filename)
             
             with tarfile.open(tar_filepath, "w:gz") as tar:
-                tar.add(FOLDER_PATH, arcname=os.path.basename(FOLDER_PATH))
+                for root, dirs, files in os.walk(FOLDER_PATH):
+                    if root.startswith(EXCLUDED_SUBFOLDER):
+                        continue
+                    for file in files:
+                        full_path = os.path.join(root, file)
+                        tar.add(full_path, arcname=os.path.relpath(full_path, FOLDER_PATH))
             
             logging.info(f"Created tar file: {tar_filepath}")
         except Exception as e:
@@ -107,3 +119,4 @@ class Handler(FileSystemEventHandler):
 if __name__ == '__main__':
     w = Watcher()
     w.run()
+
