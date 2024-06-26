@@ -1,4 +1,4 @@
-<img title="" src="file:///C:/Users/jaime/OneDrive/Documentos/e-books/lightning%20para%20iniciantes/ln-ebook-cover.png" alt="s" width="206" data-align="center">
+
 
 # Lightning Network Para Iniciantes
 
