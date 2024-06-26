@@ -169,7 +169,7 @@ Olá novamente! Se você chegou até aqui, já sabe o que são canais na Lightni
 
 O rebalancing de canais é o processo de ajustar os saldos dos canais para garantir que haja liquidez suficiente em ambos os lados. Em termos simples, é como garantir que você tenha dinheiro tanto na sua carteira quanto na sua conta bancária, de modo que possa pagar por qualquer coisa, em qualquer lugar. No contexto da Lightning Network, isso significa garantir que tanto você quanto sua contraparte possam continuar a enviar e receber pagamentos sem interrupções.
 
-Lembra da gangorra? É o processo de deixar a gangorra com o assento do jeito que você deseja. Há canais que onde é interessante manter o assento no chão (muito OUTBOUD) ou deixar o assento no alto (muito INBOUND). Durante a operação do nó, você verá que há canais por onde os sats entram mais frequentemente (canais SOURCE) e há canais por onde os sats saem mais frequentemente (canais SINK). Então a estratégia de rebalanceamento deve levar isso em conta.
+Lembra da gangorra? É o processo de deixar a gangorra com o assento do jeito que você deseja. Há canais que onde é interessante manter o assento no chão (muito OUTBOUND) ou deixar o assento no alto (muito INBOUND). Durante a operação do nó, você verá que há canais por onde os sats entram mais frequentemente (canais SOURCE) e há canais por onde os sats saem mais frequentemente (canais SINK). Então a estratégia de rebalanceamento deve levar isso em conta.
 
 ### Objetivos e Benefícios do Rebalancing
 
