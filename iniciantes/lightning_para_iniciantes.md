@@ -56,6 +56,8 @@ Para entender a Lightning Network, é essencial compreender o que são os nós (
 
 Imagine um nó como um ponto de acesso em uma vasta rede de estradas. Cada ponto de acesso permite que os carros entrem, saiam ou passem de um ponto a outro. No contexto da Lightning Network, um nó funciona de maneira semelhante, gerenciando canais de pagamento e facilitando a movimentação de fundos entre diferentes partes da rede.
 
+Cada nó possui vários canais, por onde pagamentos entram e saem. É muito importante manter os canais operacionais. Explicaremos e detalhes o que é um canal no capítulo 3.
+
 ### Vantagens e Desvantagens de Ter o Seu Próprio Nó
 
 Ter o seu próprio nó Lightning vem com uma série de vantagens e desvantagens. Vamos explorá-las para ajudá-lo a decidir se vale a pena configurar o seu próprio nó.
@@ -101,6 +103,9 @@ Concluindo, os nós são componentes essenciais da Lightning Network, permitindo
 Olá novamente! Já discutimos os conceitos gerais da Lightning Network e o papel dos nós (nodes). Agora, vamos mergulhar em um dos componentes mais críticos da Lightning Network: os canais de pagamento e recebimento. Entender o que são canais e como funcionam é essencial para compreender a magia por trás da Lightning Network.
 
 Em termos simples, um canal na Lightning Network é uma conexão entre duas partes que permite a transferência de fundos fora da blockchain principal do Bitcoin. Pense nisso como uma conta corrente compartilhada entre duas pessoas. Uma vez que a conta é aberta, ambas as partes podem fazer várias transações entre si sem que cada uma dessas transações precise ser registrada na blockchain do Bitcoin.
+
+Outra analogia interesante seria comparar o canal a uma gangorra. Quando você abre um canal, você aloca muitos sats do seu lado da gangorra, deixando ela pesada do seu lado e com o assento no chão. Conforme os pagamentos vão sendo enviados ao peer pelo seu canal, os sats entram em algum outro canal do seu nó e saem pelo canal recém aberto, com o assento no chão, fluindo para o outro lado, "aumentando o peso do outro lado da gangorra". Isso fará com que a gangorra "suba" um pouco do seu lado e desça um pouco do lado do seu peer. Isso DIMINUI SEU OUTBOUND e AUMENTA SEU INBOUND nesse canal.
+O ponto ótimo é quado temos 50% em ambos os lados, e a gangorra está na horizontal. Esse processo pode ser forçado, como em breve explicaremos no Capítulo 4.
 
 ### Por que os Canais são Fundamentais para a Segurança e Escalabilidade da Rede
 
@@ -163,6 +168,8 @@ Agora que exploramos os canais em detalhes, espero que você tenha uma compreens
 Olá novamente! Se você chegou até aqui, já sabe o que são canais na Lightning Network e como eles funcionam. Agora, vamos explorar uma parte crucial da manutenção de canais: o rebalancing. No exemplo anterior, comparamos os canais a contas conjuntas ou cartões de transporte pré-pagos. Mas o que acontece quando o saldo de um canal se esgota? É aqui que entra o rebalancing de canais.
 
 O rebalancing de canais é o processo de ajustar os saldos dos canais para garantir que haja liquidez suficiente em ambos os lados. Em termos simples, é como garantir que você tenha dinheiro tanto na sua carteira quanto na sua conta bancária, de modo que possa pagar por qualquer coisa, em qualquer lugar. No contexto da Lightning Network, isso significa garantir que tanto você quanto sua contraparte possam continuar a enviar e receber pagamentos sem interrupções.
+
+Lembra da gangorra? É o processo de deixar a gangorra com o assento do jeito que você deseja. Há canais que onde é interessante manter o assento no chão (muito OUTBOUD) ou deixar o assento no alto (muito INBOUND). Durante a operação do nó, você verá que há canais por onde os sats entram mais frequentemente (canais SOURCE) e há canais por onde os sats saem mais frequentemente (canais SINK). Então a estratégia de rebalanceamento deve levar isso em conta.
 
 ### Objetivos e Benefícios do Rebalancing
 
