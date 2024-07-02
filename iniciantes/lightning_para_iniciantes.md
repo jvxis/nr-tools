@@ -607,11 +607,11 @@ Para quem deseja se aprofundar ainda mais na Lightning Network, aqui estão algu
 
   - [Denny Torres - YouTube](https://www.youtube.com/channel/UCxfUF7Kkr9JMFe8HzYeRNjA)
 
-  - [Node Runners Brasil]([Telegram: Contact @noderunnersbrasil](https://t.me/noderunnersbrasil))
-
+  - [Node Runners Brasil](https://t.me/noderunnersbrasil)
+  
   - [Morata ⚡️ - YouTube](https://www.youtube.com/@morata_voltz)
 
-  - [Discord Node Friendspool](https://discord.gg/Y6wxuuVxHn
+  - [Discord Node Friendspool](https://discord.gg/Y6wxuuVxHn)
 
 4. **Documentação Oficial**: Consulte a documentação oficial de implementações populares da Lightning Network, como LND (Lightning Network Daemon), c-lightning e Eclair.
 
