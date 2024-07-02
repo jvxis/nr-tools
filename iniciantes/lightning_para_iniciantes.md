@@ -611,7 +611,7 @@ Para quem deseja se aprofundar ainda mais na Lightning Network, aqui estão algu
 
   - [Morata ⚡️ - YouTube](https://www.youtube.com/@morata_voltz)
 
-  - [Discord Node Friendspool]([FriendsPool](https://discord.gg/Y6wxuuVxHn))
+  - [Discord Node Friendspool](https://discord.gg/Y6wxuuVxHn
 
 4. **Documentação Oficial**: Consulte a documentação oficial de implementações populares da Lightning Network, como LND (Lightning Network Daemon), c-lightning e Eclair.
 
