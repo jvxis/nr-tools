@@ -80,7 +80,7 @@ def filter_channels(channels):
 
 channel = 0
 
-def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, message, peer):
+def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, message, peer, filtered_channels):
     channel_index = 0
     success_counter = 0
     total_fee = 0  # Variable to store the total fee
@@ -113,7 +113,7 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
             print(f"✅ Transaction successful with Fee: {fee_amount} sats.\n{output.stdout}\nRemaining amount: {total_amount}\n")
             if total_amount > 0:
                 success_counter += amount
-                if should_retry_transaction(channel_index, success_counter):
+                if should_retry_transaction(channel_index, success_counter, filtered_channels):
                     peer_alias = filtered_channels[channel_index]['peer_alias']
                     print(f"Trying again as remaining local balance is higher than {args.local_balance}%: {peer_alias}")
                 else:
@@ -128,7 +128,6 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
 
         time.sleep(interval_seconds if "success" in output.stdout else 5)
 
-    #print(f"Total fee amount: {total_fee}\nTotal PPM:{(round(total_fee/amount_to_transfer))*1000000}")  # Print the total fee amount when done
     print("-" * 80)
     print(" " * 25 + f"Total fee amount: {total_fee} sats")
     print(" " * 25 + f"Total PPM:{(total_fee/amount_to_transfer)*1000000}")
@@ -143,7 +142,9 @@ def execute_payment_command(command):
     return subprocess.run(command, shell=True, capture_output=True, text=True)
 
 
-def should_retry_transaction(channel_index, success_counter):
+def should_retry_transaction(channel_index, success_counter, filtered_channels):
+    if channel_index >= len(filtered_channels):
+        return False
     remain_capacity_tx = (int(filtered_channels[channel_index]['local_balance']) - success_counter) / int(filtered_channels[channel_index]['capacity'])
     return remain_capacity_tx >= (args.local_balance / 100)
 
@@ -203,22 +204,21 @@ try:
 
     message = input("🗯️ Payment Message: ")
 
-    while True:
-        peer = input("🫗 Out Peer Alias or Pubkey: ")
-        if not peer:
-            peer = None
-            print("\n📢 No peer specified, trying first with heavy outbound peers...")
-            print(f"\n📋Getting peers with local balance >= {args.local_balance}%...")
-            channels = get_channels()
-            filtered_channels = filter_channels(channels)
-            break
-        else:
-            break
+    peer = input("🫗 Out Peer Alias or Pubkey: ")
+    if not peer:
+        peer = None
+        print("\n📢 No peer specified, trying first with heavy outbound peers...")
+        print(f"\n📋Getting peers with local balance >= {args.local_balance}%...")
+        channels = get_channels()
+        filtered_channels = filter_channels(channels)
+    else:
+        # Define filtered_channels as an empty list when a peer is specified
+        filtered_channels = []
 
 except KeyboardInterrupt:
     print("\nExiting...")
     sys.exit(0)
 
 # Send payments
+send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, message, peer, filtered_channels)
 
-send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, message, peer)
