@@ -38,7 +38,7 @@ You can send it out to your strike lightning address and send it back to your no
 2. You need to change the lines to your configuration. `nano config.ini`
 
         *[paths]*
-        # set your paths in case you cron-job it: $ whereis lncli & whereis pscli
+        # set your paths in case you cron-job it: $ whereis lncli
         # replace pathtoumbrel for your full path for umbrel directory
         lncli_path = /pathtoumbrel/scripts/app compose lightning exec lnd lncli
 
