@@ -1,3 +1,33 @@
+#!/bin/bash
+
+# Function to rebalance with smaller amounts
+rebalance_channel() {
+  local amount=$1
+  local in_peer=$2
+  local out_peer=$3
+  local max_fee_rate=$4
+  local max_attempts=$5
+  local step=$6
+
+  local current_amount=0
+  local attempts=0
+
+  while [ $current_amount -lt $amount ]; do
+    # Calculate remaining amount to rebalance
+    local remaining_amount=$((amount - current_amount))
+    
+    # If remaining amount is less than step, rebalance with remaining amount
+    if [ $remaining_amount -lt $step ]; then
+      step=$remaining_amount
+    fi
+
+    # Run the rebalance command
+    bos rebalance --amount $step --in $in_peer --out $out_peer --max-fee-rate $max_fee_rate
+    
+    # Check if the previous command was successful
+    if [ $? -ne 0 ]; then
+      attempts=$((attempts + 1))
+      echo "Rebalance attempt $attempts failed."
 
       if [ $attempts -ge $max_attempts ]; then
         echo "Reached $max_attempts failed attempts. Please enter a new maximum fee rate:"
