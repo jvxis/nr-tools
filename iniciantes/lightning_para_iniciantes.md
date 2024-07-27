@@ -1,4 +1,4 @@
-
+# [Kindle Version on AMAZON](https://www.amazon.com.br/dp/B0DBB22RNZ) 
 
 # Lightning Network Para Iniciantes
 
