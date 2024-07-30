@@ -22,3 +22,10 @@
 3. `docker-compose.yml'
    Replace the file for this one
 
+   And replace the lines 20 to
+   ```
+   RPC_USER: your_rpc_user
+   BITCOIN_RPC_USER: your_rpc_user
+   RPC_PASSWORD: your_rpc_pass
+   BITCOIN_RPC_PASSWORD: your_rpc_pass
+
