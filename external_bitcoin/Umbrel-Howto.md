@@ -17,4 +17,5 @@
 
 2. `exports.sh`
    Replace the all file for this one
+   https://github.com/jvxis/nr-tools/external_bitcoin/external_bitcoin/exports.sh
 
