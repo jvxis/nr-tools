@@ -21,11 +21,12 @@
 
 3. `docker-compose.yml'
    Replace the file for this one
-
-   And replace the lines 20 to
+   [docker-compose.yml](https://github.com/jvxis/nr-tools/blob/main/external_bitcoin/docker-compose.yml)
+   And replace the lines 20 to 23 with your rpc credentials
    ```
    RPC_USER: your_rpc_user
    BITCOIN_RPC_USER: your_rpc_user
    RPC_PASSWORD: your_rpc_pass
    BITCOIN_RPC_PASSWORD: your_rpc_pass
+
 
