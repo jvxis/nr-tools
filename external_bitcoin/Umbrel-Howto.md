@@ -16,6 +16,9 @@
    export APP_BITCOIN_RPC_AUTH='your_rpc_user:your_rcp_pass'
 
 2. `exports.sh`
-   Replace the all file for this one
-   https://github.com/jvxis/nr-tools/external_bitcoin/external_bitcoin/exports.sh
+   Replace the file for this one
+   [exports.sh](https://github.com/jvxis/nr-tools/blob/main/external_bitcoin/exports.sh)
+
+3. `docker-compose.yml'
+   Replace the file for this one
 
