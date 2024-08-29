@@ -233,4 +233,145 @@ You need Balance of Satoshis (BOS) installed
 
 **Done!**
 
+##
 
+# [Disable and Close any Lightning Channel - Script](https://github.com/jvxis/nr-tools/blob/main/closechannel.py)
+
+This repository contains a Python script designed to disable a specific Lightning Network channel using `charge-lnd` before closing it. The script checks for pending HTLCs, ensures that the channel remains disabled, and uses dynamic fee rates to close the channel efficiently.
+
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Example Screenshot](#example-screenshot)
+- [Running With Screen](#running-the-script-automatically-with-screen)
+
+## Requirements
+
+Before running the script, ensure you have the following installed:
+
+- **Python 3.7+**
+- **lncli** (part of LND)
+- **charge-lnd** ([charge-lnd GitHub repository](https://github.com/accumulator/charge-lnd))
+- **LNDg** ([LNDg Github](https://github.com/cryptosharks131/lndg))
+- **Requests library** (Python library for HTTP requests)
+
+## Installation
+
+### 1. **Install Python dependencies:**
+
+Ensure you have requests installed:
+```
+pip install requests
+```
+
+### 2. **Install and configure charge-lnd:**
+
+Follow the instructions on the official [charge-lnd GitHub](https://github.com/accumulator/charge-lnd) repository to install and configure charge-lnd on your system.
+
+## Usage
+
+### 1. **Run the Script**
+
+To run the script, execute the following command:
+
+```
+python3 closechannel.py
+```
+
+### 2. **Follow the On-Screen Instructions**
+
+* Enter the desired max_fee_rate: This is the maximum fee rate in sat/vbyte that you are willing to pay to close the channel.
+* Enter the Channel ID: Provide the channel ID (chan_id) of the channel you wish to disable and close.**
+
+### 3. **Watch the Script in Action**
+
+### 4. **The script will:**
+
+* Disable the channel by creating/updating a configuration file in the specified directory.
+* Run charge-lnd to apply the configuration and disable the channel.
+* Check for pending HTLCs and wait until they are cleared.
+* Re-run charge-lnd periodically to ensure the channel remains disabled.
+* Close the channel using the specified fee rate or a dynamic fee rate obtained from Mempool.Space.
+
+### 5. **Monitor the Output**
+
+* The script provides detailed output, showing each step of the process, including any errors encountered.
+
+## Example Screenshot
+
+![image](https://github.com/user-attachments/assets/d34e7650-2387-4695-a548-80dcf737261b)
+
+## Running the Script Automatically with `screen`
+
+To avoid manually monitoring the script in the terminal, you can run it in a `screen` session. This allows the script to continue running in the background, even if you disconnect from your session. You can also reattach to the session later to check on the progress.
+
+### Step-by-Step Guide:
+
+### 1. **Install `screen` (if not already installed)**
+
+If `screen` is not already installed, you can install it using your package manager:
+
+- **Debian/Ubuntu:**
+
+```
+  sudo apt-get install screen
+```
+
+### 2. **Start a new screen session**
+
+Open your terminal and navigate to the directory where the script is located:
+
+``` 
+cd /path/to/your-repository
+```
+Start a new screen session with a name of your choice:
+
+```
+screen -S <name_of_your_choice>
+```
+
+### 3. **Run the script inside the screen session**
+
+Once inside the screen session, run your Python script:
+
+```
+python3 closechannel.py
+```
+
+### 4. **Detach from the screen session**
+
+You can now detach from the screen session and leave the script running in the background:
+
+* Detach from the session by pressing Ctrl + A, then D.
+
+Your script will continue running even after you close the terminal.
+
+### 5. **Reattach to the screen session later**
+
+* If you want to check on the progress or logs of the running script, you can reattach to the screen session:
+
+List all running screen sessions to find your session name:
+
+```
+screen -ls
+```
+
+Reattach to your session:
+
+```
+screen -r <your_session_name>
+```
+
+Now, you can see the output of your script and interact with it if necessary.
+
+### 6. **Exit the screen session when done**
+
+When your script has finished and you no longer need the session, you can exit the screen session by simply typing:
+
+```
+exit
+```
+
+This will close the session.
