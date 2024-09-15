@@ -10,7 +10,7 @@ import os
 from config import *
 
 # Please, before using the bot, enter the necessary paths in the /nr-tools/config.py file
-# Attention this is the Umbrel version, for Standalone installations use lntools-bot-sa.py
+# Attention this is the Standalone version, for Umbrel installations use lntools-bot.py
 
 # Insert your Telegram bot token
 TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
@@ -74,7 +74,7 @@ def send_sats(ln_address, amount, message, peer):
 
 
 def connect_to_node(node_key_address):
-    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli connect {node_key_address} --timeout 120s"
+    command = f"lncli connect {node_key_address} --timeout 120s"
     print(f"Command:{command}")
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
@@ -91,7 +91,7 @@ def connect_to_node(node_key_address):
 def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_amount):
     # Format the command
     command = (
-        f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli openchannel "
+        f"lncli openchannel "
         f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
         f"{formatted_outpoints} --local_amt={input_amount}"
     )
@@ -99,7 +99,7 @@ def execute_lnd_command(node_pub_key, fee_per_vbyte, formatted_outpoints, input_
     
     # Option to not use the UTXOs
     #command = (
-    #    f"{path_to_umbrel}/scripts/app compose lightning exec lnd lncli openchannel "
+    #    f"lncli openchannel "
     #    f"--node_key {node_pub_key} --sat_per_vbyte={fee_per_vbyte} "
     #    f"--local_amt={input_amount}"
     #)
@@ -176,7 +176,7 @@ def get_node_alias(pub_key):
         return ''
 
 def get_lncli_utxos():
-    command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli listunspent --min_confs=3"
+    command = f"lncli listunspent --min_confs=3"
     process = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     output, error = process.communicate()
     output = output.decode("utf-8")
@@ -254,12 +254,7 @@ def calculate_utxos_required_and_fees(amount_input, fee_per_vbyte):
 def execute_lncli_addinvoice(amt, memo, expiry):
     # Command to be executed
     command = [
-        f"{PATH_TO_UMBREL}/scripts/app",
-        "compose",
-        "lightning",
-        "exec",
-        "lnd",
-        "lncli",
+        f"lncli",
         "addinvoice",
         "--memo", memo,
         "--amt", amt,
@@ -375,7 +370,7 @@ def pay_invoice(message):
         bot.send_message(chat_id, f'💸 Paying Invoice {payment_request}...')
 
         # Replace the command with your actual command
-        pay_invoice_cmd = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli payinvoice {payment_request} --force"
+        pay_invoice_cmd = f"lncli payinvoice {payment_request} --force"
 
         try:
             # Execute the command and capture both stdout and stderr
@@ -554,7 +549,7 @@ def bckliquidwallet(message):
 @bot.message_handler(commands=['newaddress'])
 @authorized_only
 def generate_new_address(message):
-    umbrel_command = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli newaddress p2tr"
+    umbrel_command = f"lncli newaddress p2tr"
     try:
         output = subprocess.check_output(umbrel_command, shell=True, universal_newlines=True)
         address_data = json.loads(output)
@@ -577,7 +572,7 @@ def sign_message(message):
         command = message.text.split(' ', 1)
         message_sign = command[1]
 
-        sign = f"{PATH_TO_UMBREL}/scripts/app compose lightning exec lnd lncli signmessage {message_sign}"
+        sign = f"lncli signmessage {message_sign}"
         output = subprocess.check_output(sign, shell=True, universal_newlines=True)
         data = json.loads(output)
         signed_message = data.get("signature", [])
