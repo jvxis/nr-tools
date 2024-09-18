@@ -1,1 +1,0 @@
-This is an example of message file to show on your dashboard. Put here anything you want.

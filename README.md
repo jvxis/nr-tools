@@ -57,7 +57,8 @@ This will first consider the channels where the local liquidity is above 40%
 4. The program will end only after the total amount informed is transferred
 5. Tips: Use a wallet service with free withdrawals like Strike, and define a smaller amount per transaction.
 
-## [lntools-bot.py](https://github.com/jvxis/nr-tools/blob/main/lntools-bot.py)
+## [lntools-bot.py](https://github.com/jvxis/nr-tools/blob/main/lntools-bot.py) Umbrel Version
+## [lntools-bot-sa.py](https://github.com/jvxis/nr-tools/blob/main/lntools-bot-sa.py) Standalone Version
 You can control your Lightning Node using Telegram. This tool allows you to pay invoices, generate invoices, send SATs, and much more.
 All available commands
 
