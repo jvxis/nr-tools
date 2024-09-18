@@ -11,7 +11,7 @@ Follow these steps:
    sudo nano docker-compose.yml
 3. Locate line `45` and change its content to:
    ```bash
-   image: lightninglabs/lnd:v0.18.3-beta.rc3@sha256:42cf149d859b16fdc37d17f1944d6d67ee9c9a8fcd1d34d940f0f0b30b17b2be
+   image: lightninglabs/lnd:v0.18.3-beta@sha256:f86bbec4dfb370436384db5d67732bbd627bf6b7f574bde3d5eed32242132287
 4. Press `CTRL+X`, then press `Y` to save the changes, and hit `Enter` to exit the editor.
 5. Restart your LND by running:
    ```bash
