@@ -376,3 +376,63 @@ exit
 ```
 
 This will close the session.
+
+
+## 📢 [Lightning Network Advertising Script with boskeysend.py](https://github.com/jvxis/nr-tools/blob/main/boskeysend.py)
+
+This Python script allows you to send low-cost advertisements via the **Lightning Network**. You can target nodes by country, limit the number of peers you want to send the message to, and filter out nodes with more than 150 channels. It's a simple and cost-effective way to spread your message to Lightning Network operators.
+
+## Features
+
+- **Target by country**: Use the ISO Alpha-2 country code (e.g., `br` for Brazil) to select which country's nodes you want to reach.
+- **Limit the number of peers**: Define the maximum number of peers to send the message to.
+- **Node filtering**: The script avoids nodes with more than 150 channels to focus on smaller operators.
+- **Low cost**: Messages are sent via the Lightning Network with a default payment of just 1 satoshi.
+- **Logging**: All operations are logged to a file (`boskeysend.log`), including successful and failed attempts.
+
+## Requirements
+
+Before running the script, you need to install the following:
+
+1. **Python 3.6+**
+2. **Python Libraries**:
+    - `requests`: For fetching data from the API.
+
+   You can install it using pip:
+
+```
+pip install requests
+```
+
+### How It Works?
+
+The script performs the following tasks:
+
+* Prompts for input: You will be asked to enter the country code (ISO Alpha-2), the message to send, and the maximum number of peers to send to.
+* Fetches Lightning nodes: It queries the Mempool.space API to retrieve the list of Lightning nodes in the specified country.
+* Filters nodes: The script only targets nodes with 150 channels or fewer.
+* Sends the message: Using BOS, the script sends a 1-satoshi payment along with the message to each peer.
+* Logs the results: All events, including errors, are logged in boskeysend.log.
+
+### Usage
+
+1. Run the script:
+
+```
+python3 boskeysend.py
+```
+
+2. Follow the prompts:
+
+- Enter the country code (ISO Alpha-2 format).
+- Enter the message you want to send.
+- Enter the maximum number of peers to send the message to.
+
+### Logging
+
+All interactions are logged to boskeysend.log, including:
+
+* The commands run with BOS
+* The response code and output of each BOS command
+* Errors encountered during the process
+
