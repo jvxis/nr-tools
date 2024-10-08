@@ -26,7 +26,7 @@ get_nvme_info() {
   message+="Overall Health: $health | "
   message+="Critical Warnings: $critical_warning | "
   message+="Temperature: $temperature | "
-  message+="Percentage Used: $percentage_used | "
+  message+="Lifespam: $percentage_used | "
   message+="Log Error Entries: $log_errors "
 
   # Add warning if health is not PASSED
