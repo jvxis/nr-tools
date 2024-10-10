@@ -20,14 +20,18 @@ get_nvme_info() {
   log_errors=$(echo "$nvme_data" | grep "Error Information Log Entries" | awk '{print $5}')
 
   # Prepare plain text message with newlines
-  local message="💾 Checking NVMEs Health... | "
-  message+="NVMe Device: /dev/$nvme_device | "
-  message+="Model Number: $model_number | "
-  message+="Overall Health: $health | "
-  message+="Critical Warnings: $critical_warning | "
-  message+="Temperature: $temperature | "
-  message+="Lifespam: $percentage_used | "
-  message+="Log Error Entries: $log_errors "
+  local message="💾 Checking NVMEs Health"$'\n'
+  message+="NVMe Device: /dev/$nvme_device"$'\n'
+  message+="Model Number: $model_number"$'\n'
+  message+="Overall Health: $health"$'\n'
+  message+="Critical Warnings: $critical_warning"$'\n'
+  message+="Temperature: $temperature"$'\n'
+  message+="Lifespan: $percentage_used"$'\n'
+  message+="Log Error Entries: $log_errors"
+
+  # Escapando caracteres especiais no MarkdownV2
+  message=$(echo "$message" | sed 's/\./\\./g; s/-/\\-/g; s/_/\\_/g; s/\!/\\!/g')
+
 
   # Add warning if health is not PASSED
   if [[ "$health" != "PASSED" ]]; then
@@ -41,7 +45,7 @@ get_nvme_info() {
 # Function to send message to Telegram bot
 send_to_telegram() {
   local message=$1
-  curl -s -X POST "$TELEGRAM_URL" -d chat_id="$CHATID" -d text="$message" -d parse_mode="HTML"
+  curl -s -X POST "$TELEGRAM_URL" -d chat_id="$CHATID" -d text="$message" -d parse_mode="MarkdownV2"
 }
 # Replace with your NVMEs
 # Get status for both nvme0 and nvme1
