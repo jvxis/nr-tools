@@ -37,7 +37,7 @@ _CMD_LNCLI="/path/to/umbrel/scripts/app compose lightning exec -T lnd lncli"
 timeout_sec=20
 
 pushover() {
-    msg=$(echo -e "âœ‰ï¸ Checking Tor Peers - $NODE\n$1")
+    msg=$(echo -e "Checking Tor Peers - $NODE\n$1")
     curl -s \
     -d parse_mode="HTML" \
     -d text="$msg" \
