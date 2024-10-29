@@ -1,14 +1,15 @@
-#This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info.
-
 import subprocess
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import time
 
-#Dependencies
-#You need to create an account for your node on https://sparkseer.space
+#This script sells some info about your node every day, channels, and their capacity, and you get some SATs back as payment for this info.
 
+#Dependencies
+
+#You need to create an account for your node on https://sparkseer.space
 #Replace with your API_KEY - you can get it on https://sparkseer.space/account
+
 API_KEY = "SPARKEER_API_KEY"
 PAYMENTS_API_URL = "https://api.sparkseer.space/v1/sats4stats/payouts"
 
@@ -27,71 +28,70 @@ def get_last_payment_time():
             print(f"Date: {date_submitted}, Amount: {amount}, Hash: {hash_value}")
 
         if payouts:
-            # Assuming payouts are sorted by time, get the date and time of the latest payout
             latest_payout_time_str = payouts[-1].get("date_submitted")
             latest_payout_time = datetime.strptime(latest_payout_time_str, "%Y-%m-%d %H:%M:%S")
+            latest_payout_time = latest_payout_time.replace(tzinfo=timezone.utc)
             return latest_payout_time
         else:
-            # Assuming is the first time
-            return (datetime.now() - timedelta(hours=24))
+            return datetime.now(timezone.utc) - timedelta(hours=24)
     except ValueError:
         print("Error: Unable to parse payouts API response as JSON")
     return None
 
-while True:
-    # Get the date and time of the last payment
-    last_payment_time = get_last_payment_time()
+def main():
+    while True:
+        last_payment_time = get_last_payment_time()
 
-    if last_payment_time:
-        # Calculate the time difference between current time and last payment time
-        time_difference = datetime.now() - (last_payment_time - timedelta(hours=3))
+        if last_payment_time:
+            now = datetime.now(timezone.utc)
+            time_since_last_payment = now - last_payment_time
 
-        # If the time difference is greater than or equal to 24 hours, execute the main logic
-        if time_difference >= timedelta(hours=24):
-            # Print date and time
-            current_datetime = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
-            print(f"Current date and time: {current_datetime}")
+            if time_since_last_payment >= timedelta(hours=24):
+                current_datetime = now.strftime("%d-%m-%Y %H:%M:%S")
+                print(f"Current date and time: {current_datetime}")
 
-            # Execute the command and print the output
-            # Replace path_to_umbrel with the path to your Umbrel diretory
-            command_output = subprocess.run(
-                ["/path_to_umbrel/scripts/app", "compose", "lightning", "exec", "lnd", "lncli", "querymc"],
-                capture_output=True,
-                text=True
-            )
+                command_output = subprocess.run(
+                    ["lncli", "querymc"],
+                    capture_output=True,
+                    text=True
+                )
 
-            api_url = "https://api.sparkseer.space/v1/sats4stats/probes"
-            headers = {
-                "Content-Type": "application/json",
-                "api-key": API_KEY
-            }
+                api_url = "https://api.sparkseer.space/v1/sats4stats/probes"
+                headers = {
+                    "Content-Type": "application/json",
+                    "api-key": API_KEY
+                }
 
-            response = requests.post(api_url, headers=headers, data=command_output.stdout)
-            # Extract and print the value of the "error" key or success message
-            
-            try:
-                response_json = response.json()
-                if "error" in response_json:
-                    error_value = response_json.get("error")
-                    print(f"Error value: {error_value}")
-                elif "receipt" in response_json:
-                    receipt = response_json.get("receipt")
-                    settlement_time = receipt.get("settlement_time")
-                    amount = receipt.get("amount")
-                    hash_value = receipt.get("hash")
-                    print(f"Your bid was sent successfully at {settlement_time}. You received {amount} sats, and the hash is {hash_value}")
-            except ValueError:
-                print("Error: Unable to parse API response as JSON")
-            
+                response = requests.post(api_url, headers=headers, data=command_output.stdout)
+                
+                try:
+                    response_json = response.json()
+                    if "error" in response_json:
+                        error_value = response_json.get("error")
+                        print(f"Error value: {error_value}")
+                    elif "receipt" in response_json:
+                        receipt = response_json.get("receipt")
+                        settlement_time = receipt.get("settlement_time")
+                        amount = receipt.get("amount")
+                        hash_value = receipt.get("hash")
+                        print(f"Your bid was sent successfully at {settlement_time}. You received {amount} sats, and the hash is {hash_value}")
+                except ValueError:
+                    print("Error: Unable to parse API response as JSON")
 
-            # Sleep for one hour
-            time.sleep(3600)
+                next_run_time = last_payment_time + timedelta(days=1)
+                sleep_duration = (next_run_time - now).total_seconds()
+                if sleep_duration < 0:
+                    sleep_duration = 0
+                print(f"Waiting {sleep_duration} seconds until the next check.")
+                time.sleep(sleep_duration)
+            else:
+                remaining_time = timedelta(hours=24) - time_since_last_payment
+                sleep_duration = remaining_time.total_seconds()
+                print(f"Waiting {sleep_duration} seconds before checking again.")
+                time.sleep(sleep_duration)
         else:
-            # If the time difference is less than 24 hours, sleep for the remaining time
-            remaining_sleep_time = timedelta(hours=24) - time_difference
-            print(f"Waiting for {remaining_sleep_time} hours before checking again.")
-            time.sleep(remaining_sleep_time.total_seconds())
-    else:
-        # If there is an issue getting the last payment time, sleep for an hour and try again
-        print("Error: Unable to retrieve last payment time. Retrying in one hour.")
-        time.sleep(3600)
+            print("Error: Unable to retrieve last payment time. Retrying in one hour.")
+            time.sleep(3600)
+
+if __name__ == "__main__":
+    main()
