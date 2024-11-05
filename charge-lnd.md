@@ -160,11 +160,12 @@ max_htlc_msat_ratio = 0.005
 Sair e Salvar: CTRL+X teclar Y
 
 ## COMANDO para UMBREL (Atencao ao Diretorio)
+O comando considera para o caso do umbrel, o usuário umbrel. Se o seu usuário for outro, alterar `/home/umbrel/umbrel` para `home/<seu_user>/umbrel`
 ```
 docker run --name charge --rm -it --network=umbrel_main_network -e GRPC_LOCATION=10.21.21.9:10009 -e LND_DIR=/data/.lnd -e CONFIG_LOCATION=/app/charge.config -v /home/umbrel/umbrel/app-data/lightning/data/lnd:/data/.lnd -v /home/umbrel/charge-lnd/charge.config:/app/charge.config accumulator/charge-lnd:latest
 ```
 
-## COMANDO para Standalone (Considera user Admin e Instalacao do lnd no /data/lnd
+## COMANDO para Standalone (Considera user Admin e Instalacao do lnd no /data/lnd)
 ```
 docker run --name charge --rm -t -e GRPC_LOCATION=localhost:10009 -e LND_DIR=/data/.lnd -e CONFIG_LOCATION=/app/charge.config -v /data/lnd:/data/.lnd -v /admin/charge-lnd/charge.config:/app/charge.config accumulator/charge-lnd:latest
 ```
