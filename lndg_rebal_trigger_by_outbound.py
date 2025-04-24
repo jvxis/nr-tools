@@ -19,24 +19,12 @@ password = "lndgpassword"
 CHANNELS_API_URL = 'http://lndg-ip:8889/api/channels/?is_open=true&private=&is_active=true'
 CHANNEL_UPDATE_API_URL = 'http://lndg-ip:8889/api/channels/{chan_id}/'
 
-# Minimum local balance threshold
-MIN_BALANCE = 1500000  # Set the minimum balance threshold
-
-# Exclusion list of chan_ids
+# Exclusion list of chan_ids, this is an example. Please configure your list.
 EXCLUSION_LIST = [
-    '891080507132936203',
-    '891176164675354632',
-    '891176164674764808',
+    '891080507132936203', #LNBig Edge3
+    '891176164674764808', #LNBIG Hub2
     '965520742847741953', #Boltz
-    '925400663131684865', #Acinq
-    '918015243549736961',
-    '914599060772356097', #bfx ln01
-    '884138190664040449', #bfx ln00 small
-    '947961542113820673', #bfx ln00 big
-    '919866821043879944', #strike
-    '963360202535862273', #Kraken
-    '965040256218497028', #loop
-    '946845537857699841', #Boltz CLN
+    '982701711585312770', #Acinq
     '975284406145187841', #Kappa
     '947785620256129025'  #lndwr3 - Strike
 ]
@@ -80,6 +68,12 @@ async def process_channels():
         channels_data = await get_channels(session)
         channels = channels_data.get('results', [])
 
+        # Calcular a proporção global de local_balance/capacity
+        total_capacity = sum(channel['capacity'] for channel in channels)
+        total_local_balance = sum(channel['local_balance'] for channel in channels)
+        # Evitar divisão por zero
+        local_balance_prop = (total_local_balance / total_capacity) if total_capacity else 0
+
         messages = []
         message_block = ""
 
@@ -97,25 +91,50 @@ async def process_channels():
             ar_max_cost = channel['ar_max_cost']
             auto_rebalance_current = channel['auto_rebalance']
             capacity = channel['capacity']
-            
-            # Adjust MIN_LOCAL_BALANCE for channels with capacity below 5,000,000
-            if capacity < 5000000:
-                adjusted_min_balance = (capacity * MIN_BALANCE) / 5000000
+
+            # Definir o `adjusted_min_balance` baseado na proporção calculada
+            if capacity > 10000000:
+                adjusted_min_balance = 10000000 * local_balance_prop
             else:
-                adjusted_min_balance = MIN_BALANCE
+                adjusted_min_balance = capacity * local_balance_prop
             
             if local_balance < adjusted_min_balance and local_fee_rate > (remote_fee_rate / (ar_max_cost / 100)):
                 auto_rebalance_needed = True
             else:
                 auto_rebalance_needed = False
 
+            # Calcular channel_prop usando adjusted_min_balance e capacidade
+            channel_prop = adjusted_min_balance / capacity if capacity else 0
+
+            # Ajustar targets com base em channel_prop (Ex.: 0.25 => out:25, in:75)
+            new_ar_out_target = int(round(channel_prop * 100))
+            new_ar_in_target = 100 - new_ar_out_target
+
+            # Verificar se existe alteração necessária em auto_rebalance, ar_out_target ou ar_in_target
+            update_fields = {}
             if auto_rebalance_needed != auto_rebalance_current:
-                data = {"auto_rebalance": auto_rebalance_needed}
-                await update_channel(session, chan_id, data)
+                update_fields["auto_rebalance"] = auto_rebalance_needed
+
+            if channel.get("ar_out_target") != new_ar_out_target:
+                update_fields["ar_out_target"] = new_ar_out_target
+
+            if channel.get("ar_in_target") != new_ar_in_target:
+                update_fields["ar_in_target"] = new_ar_in_target
+
+            if update_fields:
+                await update_channel(session, chan_id, update_fields)
                 
                 local_balance_str = f"{local_balance:,}"
-                print(f"⚖️Channel: {chan_id} with peer alias {alias} - Local Balance {local_balance_str} - Local Fee {local_fee_rate} - Remote Fee {remote_fee_rate} - AR set to {auto_rebalance_needed}")
-                message = f"⚖️Channel: {chan_id} with peer alias {alias} - Local Balance {local_balance_str} - Local Fee {local_fee_rate} - Remote Fee {remote_fee_rate} - AR set to {auto_rebalance_needed}\n"
+                adjusted_min_balance_str = f"{int(adjusted_min_balance):,}"
+                print(f"🔍 Canal: {chan_id} | {alias}\n💰 Local Balance: {local_balance_str}\n📊 Adjusted Min Balance: {adjusted_min_balance_str}\n💸 Local Fee: {local_fee_rate} | Remote Fee: {remote_fee_rate}\n🤖 AR set to: {auto_rebalance_needed}\n🔀 AR Targets: Out: {new_ar_out_target} | In: {new_ar_in_target}")
+                message = (
+                    f"🔍 Canal: {chan_id} | {alias}\n"
+                    f"💰 Local Balance: {local_balance_str}\n"
+                    f"📊 Adjusted Min Balance: {adjusted_min_balance_str}\n"
+                    f"💸 Local Fee: {local_fee_rate} | Remote Fee: {remote_fee_rate}\n"
+                    f"🤖 AR set to: {auto_rebalance_needed}\n"
+                    f"🔀 AR Targets: Out: {new_ar_out_target} | In: {new_ar_in_target}\n"
+                )
                 messages.append(message)
         
         for msg in messages:
