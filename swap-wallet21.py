@@ -12,6 +12,8 @@ import sys
 parser = argparse.ArgumentParser(description='Lightning Swap Wallet')
 parser.add_argument('-lb', '--local-balance', type=float, default=60,
                     help='Minimum local balance percentage to consider for transactions (default: 60)')
+parser.add_argument('-to', '--timeout', type=int, default=300,
+                    help='Timeout in seconds for each payment command (default: 300)')
 args = parser.parse_args()
 
 # Path to the config.ini file located in the parent directory
@@ -101,7 +103,7 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
                 channel_index = 0  # Reset channel index to start over
                 continue  # Skip the rest of the loop and try again
 
-        output = execute_payment_command(command_to_execute)
+        output = execute_payment_command(command_to_execute, timeout=args.timeout)
         if "success" in output.stdout:
             # Extract the fee from the output using a regex
             fee_match = re.search(r'fee:\s+(\d+)', output.stdout.split('paying:')[-1])
@@ -137,9 +139,19 @@ def build_command(ln_address, amount, message, fee_rate, peer):
     return f"{full_path_bos} send {ln_address} --amount {amount} --message \"{message}\" --max-fee-rate {fee_rate} --out {peer}"
 
 
-def execute_payment_command(command):
+def execute_payment_command(command, timeout=None):
+    if timeout is None:
+        timeout = args.timeout
     print(f"Executing command: {command}\n")
-    return subprocess.run(command, shell=True, capture_output=True, text=True)
+    try:
+        return subprocess.run(command, shell=True, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        print(f"⏰ Timeout: Command took longer than {timeout} seconds. Skipping to next peer.\n")
+        class TimeoutResult:
+            def __init__(self):
+                self.stdout = ""
+                self.stderr = f"Timeout after {timeout} seconds"
+        return TimeoutResult()
 
 
 def should_retry_transaction(channel_index, success_counter, filtered_channels):
@@ -221,4 +233,3 @@ except KeyboardInterrupt:
 
 # Send payments
 send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, message, peer, filtered_channels)
-
