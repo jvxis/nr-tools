@@ -7,6 +7,7 @@ import configparser
 import re
 import argparse
 import sys
+import random
 
 # Parse the command line arguments
 parser = argparse.ArgumentParser(description='Lightning Swap Wallet')
@@ -99,9 +100,10 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
                 print(f"Peer:{channel_index} - {peer_alias}")
                 command_to_execute = build_command(ln_address, amount, message, fee_rate, remote_pubkey)
             else:
-                print("All peers attempted, starting over with random peers...")
-                channel_index = 0  # Reset channel index to start over
-                continue  # Skip the rest of the loop and try again
+                print("All peers attempted, shuffling peers and starting over...")
+                random.shuffle(filtered_channels)
+                channel_index = 0
+                continue
 
         output = execute_payment_command(command_to_execute, timeout=args.timeout)
         if "success" in output.stdout:
@@ -113,6 +115,10 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
 
             total_amount -= amount
             print(f"✅ Transaction successful with Fee: {fee_amount} sats.\n{output.stdout}\nRemaining amount: {total_amount}\n")
+            # Prévia dos sats gastos e PPM acumulado
+            spent = total_fee
+            ppm = (total_fee / (amount_to_transfer - total_amount)) * 1_000_000 if (amount_to_transfer - total_amount) > 0 else 0
+            print(f"📊 Parcial: Sats gastos: {spent} | PPM: {ppm:.2f}\n")
             if total_amount > 0:
                 success_counter += amount
                 if should_retry_transaction(channel_index, success_counter, filtered_channels):
@@ -125,6 +131,10 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
                 print("Execution finished 🎉")
         else:
             print(f"❌ Transaction failed {output.stderr}. Moving to next peer...\n")
+            # Prévia dos sats gastos e PPM acumulado mesmo em caso de erro
+            spent = total_fee
+            ppm = (total_fee / (amount_to_transfer - total_amount)) * 1_000_000 if (amount_to_transfer - total_amount) > 0 else 0
+            print(f"📊 Parcial: Sats gastos: {spent} | PPM: {ppm:.2f}\n")
             channel_index += 1
             success_counter = 0  # Reset success counter on failure
 
