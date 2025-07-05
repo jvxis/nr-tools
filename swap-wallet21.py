@@ -100,8 +100,9 @@ def send_payments(ln_address, amount, total_amount, interval_seconds, fee_rate, 
                 print(f"Peer:{channel_index} - {peer_alias}")
                 command_to_execute = build_command(ln_address, amount, message, fee_rate, remote_pubkey)
             else:
-                print("All peers attempted, shuffling peers and starting over...")
-                random.shuffle(filtered_channels)
+                print("All peers attempted, refiltering channels and starting over...")
+                channels = get_channels()
+                filtered_channels = filter_channels(channels)
                 channel_index = 0
                 continue
 
