@@ -18,6 +18,11 @@ TELEGRAM_BOT_TOKEN = "YOUR-TELEGRAM-BOT-TOKEN"
 TELEGRAM_USER_ID = "YOUR-TELEGRAM-USER-ID" 
 BOS_PATH = "path_to_your_BOS_binary"
 
+#LNDG Credentials
+AR_ENABLED_API_URL = 'http://SEU_IP:8889/api/settings/AR-Enabled/?format=api'
+LNDG_USERNAME = "lndg-admin"
+LNDG_PASSWORD = "LNDG_PASSWORD"
+
 # Emoji constants
 SUCCESS_EMOJI = "✅"
 ERROR_EMOJI = "❌"
@@ -165,7 +170,23 @@ def open_channel(pubkey, size, fee_rate):
     print(msg_open)
     return funding_tx, msg_open       
 
-
+def adjust_ar_enabled(ar_enabled, chat_id):
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ar_enabled_str = "1" if ar_enabled else "0"
+    try:
+        response = requests.put(
+            AR_ENABLED_API_URL,
+            json={"value": ar_enabled_str},
+            auth=(LNDG_USERNAME, LNDG_PASSWORD)
+        )
+        if response.status_code == 200:
+            msg = f"{timestamp}: ✅ AR-Enabled set to {ar_enabled_str}"
+        else:
+            msg = f"{timestamp}: ❌ Failed to set AR-Enabled to {ar_enabled_str}: Status {response.status_code}"
+    except Exception as e:
+        msg = f"{timestamp}: ❌ LNDg API request failed: {e}"
+    bot.send_message(chat_id, msg)
+    
 def get_node_alias(pub_key):
     try:
         response = requests.get(f"https://mempool.space/api/v1/lightning/nodes/{pub_key}")
@@ -583,6 +604,16 @@ def sign_message(message):
     except IndexError:
         bot.reply_to(message, "Please provide the message to sign. Ex: /sign <message>")
 
+@bot.message_handler(commands=['lndgrebal'])
+@authorized_only
+def lndgrebal_command(message):
+    args = message.text.split()
+    if len(args) < 2 or args[1] not in ["on", "off"]:
+        bot.reply_to(message, "Use: /lndgrebal on ou /lndgrebal off")
+        return
+    ar_enabled = args[1] == "on"
+    adjust_ar_enabled(ar_enabled, message.chat.id)
+    
 @bot.message_handler(commands=['lndlogs'])
 @authorized_only
 def lndlogs(message):
