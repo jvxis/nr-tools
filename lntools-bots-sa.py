@@ -8,6 +8,7 @@ from io import StringIO
 sys.path.append('/path/to/nr-tools/')
 import os
 from config import *
+import datetime
 
 # Please, before using the bot, enter the necessary paths in the /nr-tools/config.py file
 # Attention this is the Standalone version, for Umbrel installations use lntools-bot.py
