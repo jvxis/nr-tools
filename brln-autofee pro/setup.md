@@ -50,7 +50,15 @@ Este utilitário define/ajusta a **outgoing fee (ppm)** por canal do seu node LN
 5. **Circuit Breaker**  
 - Se a última ação foi **UP** e, em até `CB_GRACE_DAYS`, `forwards_7d < baseline * CB_DROP_RATIO` → reduz `CB_REDUCE_STEP`
 
----
+6. **Ajuste com o Rebal**
+Composição do custo no ALVO
+- "global"      = usa só o custo global 7d
+- "per_channel" = usa só o custo por canal 7d
+- "blend"       = mistura global e por canal
+- Ex:
+REBAL_COST_MODE = "per_channel"
+REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
+
 
 ## ⚙️ Parâmetros (edite no topo do script)
 
