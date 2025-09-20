@@ -98,7 +98,7 @@ Este utilitário define/ajusta a **outgoing fee (ppm)** por canal do seu node LN
 ## ✅ Pré-requisitos
 
 - Python 3.10+ (funciona em 3.12; datas são passadas como ISO para sqlite3)
-- `requests` instalado (`pip install requests`)
+- `requests` instalado (`pip3 install requests`)
 - `bos` instalado e executável no caminho configurado
 - Permissões para rodar `lncli listchannels` no mesmo usuário do script
 
