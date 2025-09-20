@@ -23,24 +23,30 @@ LOOKBACK_DAYS = 7
 CACHE_PATH    = "/home/admin/.cache/auto_fee_amboss.json"
 STATE_PATH    = "/home/admin/.cache/auto_fee_state.json"
 
+# --- limites base ---
 BASE_FEE_MSAT = 0
-MIN_PPM = 100
+MIN_PPM = 150          # ↑ protege receita mínima
 MAX_PPM = 2500
-STEP_CAP = 0.20
-COLCHAO_PPM = 50
 
-# thresholds de liquidez (ajuste ao teu gosto)
-LOW_OUTBOUND_THRESH = 0.20
-HIGH_OUTBOUND_THRESH = 0.80
-LOW_OUTBOUND_BUMP   = 0.25
-HIGH_OUTBOUND_CUT   = 0.20
-IDLE_EXTRA_CUT      = 0.10
+# --- “velocidade” de mudança por execução ---
+STEP_CAP = 0.05        # ↓ muda no máx. 5% por rodada (era 0.20)
 
-VOLUME_WEIGHT_ALPHA = 0.30   # ponderação pelo share de ENTRADA do peer
+# --- colchão fixo no alvo ---
+COLCHAO_PPM = 30       # ↓ menos agressivo que 50
 
-# circuit breaker (evita ficar preso em alta se cair o tráfego)
+# --- política de variação por liquidez (faixa morta: 5%–30%) ---
+LOW_OUTBOUND_THRESH = 0.05   # <5% outbound = drenado ⇒ leve alta
+HIGH_OUTBOUND_THRESH = 0.30  # >30% outbound = sobrando ⇒ leve queda
+LOW_OUTBOUND_BUMP   = 0.05   # +5% no alvo quando <5%
+HIGH_OUTBOUND_CUT   = 0.05   # -5% no alvo quando >30%
+IDLE_EXTRA_CUT      = 0.01   # corte extra por ociosidade (bem conservador)
+
+# --- peso do volume de ENTRADA do peer (Amboss) no alvo ---
+VOLUME_WEIGHT_ALPHA = 0.10   # ↓ suaviza influência (era 0.30)
+
+# --- circuit breaker (opcionalmente mais conservador) ---
 CB_WINDOW_DAYS = 7
-CB_DROP_RATIO  = 0.60
+CB_DROP_RATIO  = 0.60   # ↑ só recua se os forwards caírem mais (era 0.50)
 CB_REDUCE_STEP = 0.15
 CB_GRACE_DAYS  = 10
 
