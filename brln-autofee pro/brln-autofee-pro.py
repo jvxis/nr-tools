@@ -50,6 +50,10 @@ CB_DROP_RATIO  = 0.60   # ↑ só recua se os forwards caírem mais (era 0.50)
 CB_REDUCE_STEP = 0.15
 CB_GRACE_DAYS  = 10
 
+# --- Proteção de custo de rebal (PISO) ---
+REBAL_FLOOR_ENABLE = True     # habilita piso de segurança
+REBAL_FLOOR_MARGIN = 0.10     # 10% acima do custo médio de rebal 7d
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -105,7 +109,7 @@ def apply_step_cap(current_ppm, target_ppm):
     return target_ppm
 
 def _chunk_text(text, max_len=4000):
-    """Quebra em blocos <= max_len, preferindo quebras em '\\n'."""
+    """Quebra em blocos <= max_len, preferindo quebras em '\n'."""
     chunks = []
     while text:
         if len(text) <= max_len:
@@ -129,18 +133,19 @@ def tg_send_big(text):
         except Exception:
             pass
 
+def has_column(cur, table, column):
+    cur.execute(f"PRAGMA table_info({table})")
+    return any(r[1] == column for r in cur.fetchall())
+
 # ========== DB QUERIES ==========
 SQL_FORWARDS = """
 SELECT chan_id_in, chan_id_out, amt_in_msat, amt_out_msat, fee, forward_date
 FROM gui_forwards
 WHERE forward_date BETWEEN ? AND ?
 """
-SQL_CHAN_META = """
-SELECT chan_id, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open
-FROM gui_channels
-"""
+# >>> inclui rebal_chan para piso por canal
 SQL_REBAL_PAYMENTS = """
-SELECT value, fee, creation_date
+SELECT rebal_chan, value, fee, creation_date
 FROM gui_payments
 WHERE rebal_chan IS NOT NULL
   AND chan_out IS NOT NULL
@@ -153,29 +158,38 @@ def db_connect():
 # ========== LND SNAPSHOT ==========
 def listchannels_snapshot():
     """
-    Usa SCID decimal como chave (lncli expõe 'scid').
-    Se não houver 'scid', cai no 'chan_id' como backup.
+    Indexa o snapshot do lncli de três formas:
+      - by_scid_dec: usando 'scid' (decimal)  << MAIS CONFIÁVEL p/ cruzar com LNDg
+      - by_cid_dec:  se 'chan_id' vier numérico (algumas versões antigas)
+      - by_point:    sempre que houver 'channel_point'
     """
     data = json.loads(run(f"{LNCLI} listchannels"))
-    snap = {}
+    by_scid_dec = {}
+    by_cid_dec  = {}
+    by_point    = {}
     for ch in data.get("channels", []):
-        key = str(ch.get("scid") or ch.get("chan_id"))  # preferir scid
-        snap[key] = {
+        scid = ch.get("scid")        # decimal em string
+        cid  = ch.get("chan_id")     # pode ser HEX em versões novas
+        point = ch.get("channel_point")
+
+        info = {
             "capacity": int(ch.get("capacity", 0)),
             "local_balance": int(ch.get("local_balance", 0)),
             "remote_balance": int(ch.get("remote_balance", 0)),
             "remote_pubkey": ch.get("remote_pubkey"),
-            "chan_point": ch.get("channel_point"),
-            "alias": ch.get("peer_alias", ""),  # ajuda para debug
+            "chan_point": point,
         }
-    return snap
+        if scid is not None and str(scid).isdigit():
+            by_scid_dec[str(scid)] = info
+        if cid is not None and str(cid).isdigit():
+            by_cid_dec[str(cid)] = info
+        if point:
+            by_point[point] = info
+    return {"by_scid_dec": by_scid_dec, "by_cid_dec": by_cid_dec, "by_point": by_point}
 
 # ========== AMBOSS ==========
 def amboss_p65_incoming_ppm(pubkey, cache):
     """p65 do incoming_fee_rate_metrics/weighted_corrected_mean (7d). Cache 3h."""
-    if not AMBOSS_TOKEN:
-        return None  # sem token => sem seed Amboss
-
     key = f"incoming_p65_7d:{pubkey}"
     now = int(time.time())
     if key in cache and now - cache[key]["ts"] < 3*3600:
@@ -238,27 +252,57 @@ def main(dry_run=False):
 
     conn = db_connect()
     cur  = conn.cursor()
-    cur.execute(SQL_CHAN_META)
-    meta_rows = cur.fetchall()
 
-    # Indexa meta por SCID (assumindo que gui_channels.chan_id = SCID decimal)
-    channels_meta = {}
-    open_scids = set()
-    for (chan_id, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
-        scid = str(chan_id)  # LNDg normalmente guarda SCID decimal em gui_channels.chan_id
-        channels_meta[scid] = {
-            "alias": alias or "Unknown",
-            "local_ppm": int(local_fee_rate or 0),
-            "remote_fee_rate": int(remote_fee_rate or 0),
-            "ar_max_cost": float(ar_max_cost or 0),
-            "remote_pubkey": remote_pubkey,
-            "is_open": int(is_open or 0),
-        }
-        if int(is_open or 0) == 1:
-            open_scids.add(scid)
+    # Detecta se 'chan_point' existe no LNDg
+    if has_column(cur, "gui_channels", "chan_point"):
+        cur.execute("""
+            SELECT chan_id, chan_point, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open
+            FROM gui_channels
+        """)
+        meta_rows = cur.fetchall()
+        channels_meta = {}
+        open_cids = set()
+        for (chan_id, chan_point, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
+            cid = str(chan_id)  # este 'chan_id' do LNDg costuma ser SCID DECIMAL
+            channels_meta[cid] = {
+                "chan_point": chan_point,
+                "alias": alias or "Unknown",
+                "local_ppm": int(local_fee_rate or 0),
+                "remote_fee_rate": int(remote_fee_rate or 0),
+                "ar_max_cost": float(ar_max_cost or 0),
+                "remote_pubkey": remote_pubkey,
+                "is_open": int(is_open or 0),
+            }
+            if int(is_open or 0) == 1:
+                open_cids.add(cid)
+        has_chan_point = True
+    else:
+        cur.execute("""
+            SELECT chan_id, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open
+            FROM gui_channels
+        """)
+        meta_rows = cur.fetchall()
+        channels_meta = {}
+        open_cids = set()
+        for (chan_id, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
+            cid = str(chan_id)  # ainda é SCID DECIMAL
+            channels_meta[cid] = {
+                "chan_point": None,
+                "alias": alias or "Unknown",
+                "local_ppm": int(local_fee_rate or 0),
+                "remote_fee_rate": int(remote_fee_rate or 0),
+                "ar_max_cost": float(ar_max_cost or 0),
+                "remote_pubkey": remote_pubkey,
+                "is_open": int(is_open or 0),
+            }
+            if int(is_open or 0) == 1:
+                open_cids.add(cid)
+        has_chan_point = False
 
-    # Snapshot vivo do LN (via lncli), indexado por SCID
     live = listchannels_snapshot()
+    live_by_scid  = live["by_scid_dec"]
+    live_by_cid   = live["by_cid_dec"]
+    live_by_point = live["by_point"]
 
     # ---- Forwards (7d) para métricas de saída e in-volume por peer ----
     cur.execute(SQL_FORWARDS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
@@ -268,22 +312,29 @@ def main(dry_run=False):
     out_amt_sat = defaultdict(int)
     out_count   = defaultdict(int)
 
-    # mapa SCID->pubkey a partir do snapshot vivo
-    scid_pubkey = {}
-    for scid, info in live.items():
-        scid_pubkey[scid] = info.get("remote_pubkey")
+    # Mapa cid(LNDg/SCID) -> pubkey
+    chan_pubkey = {}
+    for scid, info in live_by_scid.items():
+        if info.get("remote_pubkey"):
+            chan_pubkey[scid] = info.get("remote_pubkey")
+    for cid, info in live_by_cid.items():
+        if info.get("remote_pubkey") and cid not in chan_pubkey:
+            chan_pubkey[cid] = info.get("remote_pubkey")
+    for cid, meta in channels_meta.items():
+        if cid not in chan_pubkey and meta.get("remote_pubkey"):
+            chan_pubkey[cid] = meta.get("remote_pubkey")
 
     incoming_msat_by_pub = defaultdict(int)
 
     for (cid_in, cid_out, amt_in_msat, amt_out_msat, fee_sat, fwd_date) in rows:
         if cid_out:
-            scid_out = str(cid_out)
-            out_fee_sat[scid_out] += int(fee_sat or 0)
-            out_amt_sat[scid_out] += int((amt_out_msat or 0)/1000)
-            out_count[scid_out]   += 1
+            k = str(cid_out)
+            out_fee_sat[k] += int(fee_sat or 0)
+            out_amt_sat[k] += int((amt_out_msat or 0)/1000)
+            out_count[k]   += 1
         if cid_in:
-            scid_in = str(cid_in)
-            pub = scid_pubkey.get(scid_in)
+            k = str(cid_in)
+            pub = chan_pubkey.get(k)
             if pub:
                 incoming_msat_by_pub[pub] += int(amt_in_msat or 0)
 
@@ -291,65 +342,79 @@ def main(dry_run=False):
     peer_count = max(1, len(incoming_msat_by_pub))
     avg_share = 1.0 / peer_count if peer_count > 0 else 0.0
 
-    # ---- Custo de rebal (7d) via gui_payments ----
+    # ---- Custo de rebal verdadeiro (7d) via gui_payments ----
     cur.execute(SQL_REBAL_PAYMENTS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
     pay_rows = cur.fetchall()
-    rebal_value_sat = 0
-    rebal_fee_sat   = 0
-    for (value, fee, creation_date) in pay_rows:
-        rebal_value_sat += int(value or 0)     # value em sat (LNDg)
-        rebal_fee_sat   += int(fee or 0)       # fee em sat
-    rebal_cost_ppm_7d = ppm(rebal_fee_sat, rebal_value_sat)  # custo usado no alvo
+
+    # Global
+    rebal_value_sat_global = 0
+    rebal_fee_sat_global   = 0
+
+    # Por canal (key = rebal_chan, esperado como SCID decimal do LNDg)
+    perchan_value_sat = defaultdict(int)
+    perchan_fee_sat   = defaultdict(int)
+
+    for (rebal_chan, value, fee, creation_date) in pay_rows:
+        v = int(value or 0)
+        f = int(fee or 0)
+        rebal_value_sat_global += v
+        rebal_fee_sat_global   += f
+        if rebal_chan is not None:
+            perchan_value_sat[str(rebal_chan)] += v
+            perchan_fee_sat[str(rebal_chan)]   += f
+
+    rebal_cost_ppm_global = ppm(rebal_fee_sat_global, rebal_value_sat_global)
+    # mapa canal->ppm
+    rebal_cost_ppm_by_chan = {
+        cid: ppm(perchan_fee_sat[cid], perchan_value_sat[cid]) for cid in perchan_value_sat.keys()
+    }
 
     report = []
-    report.append(f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_7d)} ppm (gui_payments)")
+    report.append(f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)")
 
-    missing_live = 0
+    unmatched = 0
 
-    for scid in sorted(open_scids):
-        meta = channels_meta.get(scid, {})
+    for cid in sorted(open_cids):
+        meta = channels_meta.get(cid, {})
         alias = meta.get("alias", "Unknown")
         local_ppm = meta.get("local_ppm", 0)
 
-        live_info = live.get(scid)
-        if not live_info:
-            # SCID do DB não foi achado no lncli listchannels
-            missing_live += 1
-            out_ratio = 0.50  # fallback neutro
-            pubkey = meta.get("remote_pubkey")
-            cap = 0
-            local_bal = 0
-        else:
-            pubkey = live_info.get("remote_pubkey") or meta.get("remote_pubkey")
-            cap = int(live_info.get("capacity", 0))
-            local_bal = int(live_info.get("local_balance", 0))
-            out_ratio = (local_bal / cap) if cap > 0 else 0.50
+        # encontra o snapshot correto
+        live_info = live_by_scid.get(cid)
+        if (not live_info) and has_chan_point:
+            cp = meta.get("chan_point")
+            if cp:
+                live_info = live_by_point.get(cp)
+        if (not live_info):
+            live_info = live_by_cid.get(cid)
 
+        pubkey = (live_info or {}).get("remote_pubkey") or meta.get("remote_pubkey")
         if not pubkey:
-            # sem pubkey não dá pra setar fee
-            report.append(f"⏭️  {alias} ({scid}) sem pubkey (ignorado)")
+            unmatched += 1
+        if pubkey in EXCLUSION_LIST:
+            report.append(f"⏭️  {alias} ({cid}) skip (exclusion)")
             continue
 
-        if EXCLUSION_LIST and pubkey in EXCLUSION_LIST:
-            report.append(f"⏭️  {alias} ({scid}) skip (exclusion)")
-            continue
+        cap   = int((live_info or {}).get("capacity", 0))
+        local = int((live_info or {}).get("local_balance", 0))
+        out_ratio = (local / cap) if cap > 0 else 0.5
 
-        out_ppm_7d = ppm(out_fee_sat.get(scid, 0), out_amt_sat.get(scid, 0))
-        fwd_count  = out_count.get(scid, 0)
+        out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
+        fwd_count  = out_count.get(cid, 0)
 
         # Seed Amboss (p65) do peer
-        p65 = amboss_p65_incoming_ppm(pubkey, cache)
+        p65 = amboss_p65_incoming_ppm(pubkey, cache) if pubkey else None
         if p65 is None:
             p65 = 200.0  # fallback conservador
 
         # Ponderação pelo volume de ENTRADA do peer
-        if total_incoming_msat > 0 and VOLUME_WEIGHT_ALPHA > 0:
+        if total_incoming_msat > 0 and VOLUME_WEIGHT_ALPHA > 0 and pubkey:
             share = incoming_msat_by_pub.get(pubkey, 0) / total_incoming_msat
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             p65 *= max(0.7, min(1.3, factor))
 
         # Alvo base
-        target = p65 + rebal_cost_ppm_7d + COLCHAO_PPM
+        target = p65 + rebal_cost_ppm_global + COLCHAO_PPM
 
         # Liquidez
         if out_ratio < LOW_OUTBOUND_THRESH:
@@ -362,7 +427,7 @@ def main(dry_run=False):
         target = clamp_ppm(target)
 
         # Circuit breaker
-        state_all = state.get(scid, {})
+        state_all = state.get(cid, {})
         last_ppm  = state_all.get("last_ppm", local_ppm)
         last_dir  = state_all.get("last_dir", "flat")
         last_ts   = state_all.get("last_ts", 0)
@@ -372,9 +437,23 @@ def main(dry_run=False):
 
         now_ts = int(time.time())
         if last_dir == "up" and (now_ts - last_ts) <= CB_GRACE_DAYS*24*3600 and baseline:
-            if baseline and baseline > 0 and fwd_count < baseline * CB_DROP_RATIO:
+            if baseline > 0 and fwd_count < baseline * CB_DROP_RATIO:
                 new_ppm = clamp_ppm(int(new_ppm * (1.0 - CB_REDUCE_STEP)))
-                report.append(f"🧯 CB: {alias} ({scid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
+                report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
+
+        # Piso de rebal por canal (fallback para global)
+        if REBAL_FLOOR_ENABLE:
+            ch_rebal_ppm = rebal_cost_ppm_by_chan.get(cid)
+            if ch_rebal_ppm and ch_rebal_ppm > 0:
+                floor_ppm = clamp_ppm(math.ceil(ch_rebal_ppm * (1.0 + REBAL_FLOOR_MARGIN)))
+            elif rebal_cost_ppm_global > 0:
+                floor_ppm = clamp_ppm(math.ceil(rebal_cost_ppm_global * (1.0 + REBAL_FLOOR_MARGIN)))
+            else:
+                floor_ppm = MIN_PPM
+        else:
+            floor_ppm = MIN_PPM
+
+        new_ppm = max(new_ppm, floor_ppm)
 
         # Aplica/relata
         if new_ppm != local_ppm:
@@ -382,21 +461,30 @@ def main(dry_run=False):
                 action = f"DRY set {local_ppm}→{new_ppm} ppm"
             else:
                 try:
-                    bos_set_fee_ppm(pubkey, new_ppm)
-                    action = f"set {local_ppm}→{new_ppm} ppm"
-                    new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
-                    state[scid] = {
-                        "last_ppm": new_ppm,
-                        "last_dir": new_dir,
-                        "last_ts":  now_ts,
-                        # baseline pós mudança: usa fwd_count atual como semente
-                        "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0)
-                    }
+                    if pubkey:
+                        bos_set_fee_ppm(pubkey, new_ppm)
+                        action = f"set {local_ppm}→{new_ppm} ppm"
+                        new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
+                        state[cid] = {
+                            "last_ppm": new_ppm,
+                            "last_dir": new_dir,
+                            "last_ts":  now_ts,
+                            "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0)
+                        }
+                    else:
+                        action = "❌ sem pubkey/snapshot p/ aplicar"
                 except Exception as e:
                     action = f"❌ erro ao setar: {e}"
-            report.append(f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{int(p65)}")
+            report.append(
+                f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{int(p65)} | floor≥{floor_ppm}"
+            )
         else:
-            report.append(f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)}")
+            report.append(
+                f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | floor≥{floor_ppm}"
+            )
+
+    if unmatched > 0:
+        report.append(f"ℹ️  {unmatched} canal(is) sem snapshot por scid/chan_point (out_ratio=0.50 por fallback). Cheque versão do lncli e permissões.")
 
     save_json(CACHE_PATH, cache)
     if not dry_run:
@@ -404,18 +492,12 @@ def main(dry_run=False):
 
     msg = "\n".join(report)
     print(msg)
-
-    # Só notifica no Telegram quando NÃO for dry-run
-    if not dry_run:
-        tg_send_big(msg)
-
-    # Dica no final se faltou casar SCIDs
-    if missing_live > 0:
-        print(f"ℹ️  {missing_live} canal(is) não apareceram no lncli listchannels (out_ratio=0.50 por fallback). "
-              f"Confirme LNCLI path/perm e se gui_channels.chan_id = SCID decimal.")
+    if not dry_run:            # não envia quando for --dry-run
+        tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed, ponderação por entrada, liquidez e circuit-breaker)")
-    parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE; também não notifica no Telegram")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed, ponderação por entrada, liquidez, piso de rebal por canal e circuit-breaker)")
+    parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
+
