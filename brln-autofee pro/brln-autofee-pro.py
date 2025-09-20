@@ -54,6 +54,13 @@ CB_GRACE_DAYS  = 10
 REBAL_FLOOR_ENABLE = True     # habilita piso de segurança
 REBAL_FLOOR_MARGIN = 0.10     # 10% acima do custo médio de rebal 7d
 
+# --- Composição do custo no ALVO ---
+#   "global"      = usa só o custo global 7d
+#   "per_channel" = usa só o custo por canal 7d
+#   "blend"       = mistura global e por canal
+REBAL_COST_MODE = "per_channel"
+REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -342,7 +349,7 @@ def main(dry_run=False):
     peer_count = max(1, len(incoming_msat_by_pub))
     avg_share = 1.0 / peer_count if peer_count > 0 else 0.0
 
-    # ---- Custo de rebal verdadeiro (7d) via gui_payments ----
+    # ---- Custo de rebal (7d) via gui_payments: GLOBAL e POR CANAL ----
     cur.execute(SQL_REBAL_PAYMENTS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
     pay_rows = cur.fetchall()
 
@@ -364,7 +371,6 @@ def main(dry_run=False):
             perchan_fee_sat[str(rebal_chan)]   += f
 
     rebal_cost_ppm_global = ppm(rebal_fee_sat_global, rebal_value_sat_global)
-    # mapa canal->ppm
     rebal_cost_ppm_by_chan = {
         cid: ppm(perchan_fee_sat[cid], perchan_value_sat[cid]) for cid in perchan_value_sat.keys()
     }
@@ -413,8 +419,17 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             p65 *= max(0.7, min(1.3, factor))
 
+        # --- Componente de custo no ALVO (per-channel preferido) ---
+        ch_rebal_ppm = rebal_cost_ppm_by_chan.get(cid, 0.0)
+        if REBAL_COST_MODE == "global":
+            rebal_component = rebal_cost_ppm_global
+        elif REBAL_COST_MODE == "blend":
+            rebal_component = (REBAL_BLEND_LAMBDA * rebal_cost_ppm_global) + ((1 - REBAL_BLEND_LAMBDA) * ch_rebal_ppm)
+        else:  # "per_channel" (default)
+            rebal_component = ch_rebal_ppm
+
         # Alvo base
-        target = p65 + rebal_cost_ppm_global + COLCHAO_PPM
+        target = p65 + COLCHAO_PPM + rebal_component
 
         # Liquidez
         if out_ratio < LOW_OUTBOUND_THRESH:
@@ -441,9 +456,8 @@ def main(dry_run=False):
                 new_ppm = clamp_ppm(int(new_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
-        # Piso de rebal por canal (fallback para global)
+        # Piso de rebal por canal (fallback para global se canal não tiver histórico)
         if REBAL_FLOOR_ENABLE:
-            ch_rebal_ppm = rebal_cost_ppm_by_chan.get(cid)
             if ch_rebal_ppm and ch_rebal_ppm > 0:
                 floor_ppm = clamp_ppm(math.ceil(ch_rebal_ppm * (1.0 + REBAL_FLOOR_MARGIN)))
             elif rebal_cost_ppm_global > 0:
@@ -500,4 +514,3 @@ if __name__ == "__main__":
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
-
