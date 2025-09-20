@@ -214,8 +214,9 @@ def amboss_p65_incoming_ppm(pubkey, cache):
 
 # ========== BOS ==========
 def bos_set_fee_ppm(to_pubkey, ppm_value):
-    frac = fee_fraction(ppm_value)
-    cmd = f'{BOS} fees --to {to_pubkey} --set-fee-rate {frac}'
+    # envia SEMPRE inteiro em PPM pro bos
+    v = clamp_ppm(int(round(ppm_value)))
+    cmd = f'{BOS} fees --to {to_pubkey} --set-fee-rate {v}'
     run(cmd)
 
 # ========== STATE (CB) ==========
