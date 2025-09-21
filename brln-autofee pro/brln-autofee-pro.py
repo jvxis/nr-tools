@@ -505,8 +505,12 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             seed_used *= max(0.7, min(1.3, factor))
 
+        # <<< ADIÇÃO: persistir last_seed cedo (sem dry-run não grava em disco; apenas preparara o STATE)
+        if not dry_run:
+            st_tmp = state.get(cid, {}).copy()
+            st_tmp["last_seed"] = float(seed_used)
+            state[cid] = st_tmp
 
-        
         # --- Alvo BASE: seed + colchão (sem somar rebal) ---
         target_base = seed_used + COLCHAO_PPM
         target = target_base
@@ -566,7 +570,6 @@ def main(dry_run=False):
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * OUTRATE_FLOOR_FACTOR))
             floor_ppm = max(floor_ppm, outrate_floor)
 
-
         new_ppm = max(new_ppm, floor_ppm)
 
         # Aplica/relata
@@ -581,14 +584,18 @@ def main(dry_run=False):
                         bos_set_fee_ppm(pubkey, new_ppm)
                         action = f"set {local_ppm}→{new_ppm} ppm"
                         new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
-                        state[cid] = {
-                        "last_ppm": new_ppm,
-                        "last_dir": new_dir,
-                        "last_ts":  now_ts,
-                        "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0),
-                        "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
-                        }
 
+                        # <<< ADIÇÃO: atualizar STATE preservando chaves e incluindo last_seed
+                        st = state.get(cid, {}).copy()
+                        st.update({
+                            "last_ppm": new_ppm,
+                            "last_dir": new_dir,
+                            "last_ts":  now_ts,
+                            "baseline_fwd7d": fwd_count if fwd_count > 0 else st.get("baseline_fwd7d", 0),
+                            "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
+                            "last_seed": float(seed_used),
+                        })
+                        state[cid] = st
                     else:
                         action = "❌ sem pubkey/snapshot p/ aplicar"
                 except Exception as e:
@@ -597,6 +604,13 @@ def main(dry_run=False):
                 f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
         else:
+            # <<< ADIÇÃO: mesmo sem mudar fee, persiste low_streak e last_seed (quando não for dry-run)
+            if not dry_run:
+                st = state.get(cid, {}).copy()
+                st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
+                st["last_seed"] = float(seed_used)
+                state[cid] = st
+
             report.append(
                 f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
