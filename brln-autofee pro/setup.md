@@ -126,7 +126,7 @@ Mostra o que faria; não grava estado; não envia Telegram
 
 3. Valendo
 ```bash
-/home/admin/brln-autofee.py
+/home/admin/brln-autofee-pro.py
 ```
 Aplica bos fees por canal; grava estado; envia Telegram (se configurado)
 
