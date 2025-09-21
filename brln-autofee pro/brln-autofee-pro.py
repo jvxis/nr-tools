@@ -144,6 +144,33 @@ def has_column(cur, table, column):
     cur.execute(f"PRAGMA table_info({table})")
     return any(r[1] == column for r in cur.fetchall())
 
+# === utilitário para o piso conforme REBAL_COST_MODE ===
+def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
+    """
+    Retorna o custo-base em ppm para formar o piso, conforme REBAL_COST_MODE.
+    - per_channel: usa custo do canal se houver; senão, global.
+    - global: sempre o custo global.
+    - blend: mistura lambda*global + (1-lambda)*canal; com fallbacks.
+    """
+    mode = (REBAL_COST_MODE or "per_channel").lower()
+    lam  = max(0.0, min(1.0, float(REBAL_BLEND_LAMBDA or 0.0)))
+    ch = perchan_cost_map.get(cid) or 0.0
+    gl = global_cost or 0.0
+
+    if mode == "global":
+        base = gl
+    elif mode == "blend":
+        if ch > 0 and gl > 0:
+            base = lam * gl + (1.0 - lam) * ch
+        elif ch > 0:
+            base = ch
+        else:
+            base = gl
+    else:  # per_channel (padrão)
+        base = ch if ch > 0 else gl
+
+    return base or 0.0
+
 # ========== DB QUERIES ==========
 SQL_FORWARDS = """
 SELECT chan_id_in, chan_id_out, amt_in_msat, amt_out_msat, fee, forward_date
@@ -419,19 +446,11 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             p65 *= max(0.7, min(1.3, factor))
 
-        # --- Componente de custo no ALVO (per-channel preferido) ---
-        ch_rebal_ppm = rebal_cost_ppm_by_chan.get(cid, 0.0)
-        if REBAL_COST_MODE == "global":
-            rebal_component = rebal_cost_ppm_global
-        elif REBAL_COST_MODE == "blend":
-            rebal_component = (REBAL_BLEND_LAMBDA * rebal_cost_ppm_global) + ((1 - REBAL_BLEND_LAMBDA) * ch_rebal_ppm)
-        else:  # "per_channel" (default)
-            rebal_component = ch_rebal_ppm
+        # --- Alvo BASE: seed + colchão (NÃO somar rebal no alvo) ---
+        target_base = p65 + COLCHAO_PPM
 
-        # Alvo base
-        target = p65 + COLCHAO_PPM + rebal_component
-
-        # Liquidez
+        # --- Ajuste por liquidez em cima do alvo-base ---
+        target = target_base
         if out_ratio < LOW_OUTBOUND_THRESH:
             target *= (1.0 + LOW_OUTBOUND_BUMP)
         elif out_ratio > HIGH_OUTBOUND_THRESH:
@@ -456,17 +475,17 @@ def main(dry_run=False):
                 new_ppm = clamp_ppm(int(new_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
-        # Piso de rebal por canal (fallback para global se canal não tiver histórico)
+        # Piso de rebal conforme REBAL_COST_MODE (per_channel/global/blend) — AQUI o rebal atua!
         if REBAL_FLOOR_ENABLE:
-            if ch_rebal_ppm and ch_rebal_ppm > 0:
-                floor_ppm = clamp_ppm(math.ceil(ch_rebal_ppm * (1.0 + REBAL_FLOOR_MARGIN)))
-            elif rebal_cost_ppm_global > 0:
-                floor_ppm = clamp_ppm(math.ceil(rebal_cost_ppm_global * (1.0 + REBAL_FLOOR_MARGIN)))
+            base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan, rebal_cost_ppm_global)
+            if base_cost > 0:
+                floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
             else:
                 floor_ppm = MIN_PPM
         else:
             floor_ppm = MIN_PPM
 
+        # Garante que não fique abaixo do piso após o step-cap
         new_ppm = max(new_ppm, floor_ppm)
 
         # Aplica/relata
