@@ -61,6 +61,12 @@ REBAL_FLOOR_MARGIN = 0.10     # 10% acima do custo médio de rebal 7d
 REBAL_COST_MODE = "per_channel"
 REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
 
+# --- Guard de anomalias do seed (Amboss p65) ---
+SEED_GUARD_ENABLE      = True
+SEED_GUARD_MAX_JUMP    = 0.50   # máx +50% vs seed anterior gravado no STATE
+SEED_GUARD_P95_CAP     = True   # cap no P95 da série 7d do Amboss
+SEED_GUARD_ABS_MAX_PPM = 2000   # teto absoluto opcional (0/None para desativar)
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -144,7 +150,7 @@ def has_column(cur, table, column):
     cur.execute(f"PRAGMA table_info({table})")
     return any(r[1] == column for r in cur.fetchall())
 
-# === utilitário para o piso conforme REBAL_COST_MODE ===
+# === utilitário p/ piso conforme REBAL_COST_MODE ===
 def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
     """
     Retorna o custo-base em ppm para formar o piso, conforme REBAL_COST_MODE.
@@ -177,7 +183,7 @@ SELECT chan_id_in, chan_id_out, amt_in_msat, amt_out_msat, fee, forward_date
 FROM gui_forwards
 WHERE forward_date BETWEEN ? AND ?
 """
-# >>> inclui rebal_chan para piso por canal
+# inclui rebal_chan para piso por canal
 SQL_REBAL_PAYMENTS = """
 SELECT rebal_chan, value, fee, creation_date
 FROM gui_payments
@@ -222,12 +228,26 @@ def listchannels_snapshot():
     return {"by_scid_dec": by_scid_dec, "by_cid_dec": by_cid_dec, "by_point": by_point}
 
 # ========== AMBOSS ==========
-def amboss_p65_incoming_ppm(pubkey, cache):
-    """p65 do incoming_fee_rate_metrics/weighted_corrected_mean (7d). Cache 3h."""
-    key = f"incoming_p65_7d:{pubkey}"
+def _percentile(vals, q):
+    """Percentil linear (0..1)."""
+    if not vals:
+        return None
+    vs = sorted(vals)
+    if len(vs) == 1:
+        return float(vs[0])
+    pos = q * (len(vs) - 1)
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return float(vs[lo])
+    return vs[lo] * (hi - pos) + vs[hi] * (pos - lo)
+
+def amboss_seed_series_7d(pubkey, cache):
+    """Busca série 7d de incoming_fee_rate_metrics/weighted_corrected_mean. Cache 3h."""
+    key = f"incoming_series_7d:{pubkey}"
     now = int(time.time())
     if key in cache and now - cache[key]["ts"] < 3*3600:
-        return cache[key]["val"]
+        return cache[key]["vals"]
 
     from_date = (now_utc() - datetime.timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     q = {
@@ -252,13 +272,42 @@ def amboss_p65_incoming_ppm(pubkey, cache):
         vals = [float(v[1]) for v in rows if v and len(v)==2]
         if not vals:
             return None
-        vals.sort()
-        idx = int(0.65*(len(vals)-1))
-        p65 = vals[idx]
-        cache[key] = {"ts": now, "val": p65}
-        return p65
+        cache[key] = {"ts": now, "vals": vals}
+        return vals
     except Exception:
         return None
+
+def seed_with_guard(pubkey, cache, state, cid):
+    """
+    Retorna (seed_usado, raw_p65, p95, flags)
+    Aplica guardas: p95-cap, jump vs seed anterior e teto absoluto.
+    """
+    vals = amboss_seed_series_7d(pubkey, cache)
+    if not vals:
+        return 200.0, None, None, []  # fallback conservador
+
+    raw_p65 = _percentile(vals, 0.65)
+    p95     = _percentile(vals, 0.95)
+    seed    = raw_p65
+    flags   = []
+
+    if SEED_GUARD_ENABLE:
+        if SEED_GUARD_P95_CAP and p95 is not None and seed > p95:
+            seed = p95
+            flags.append("p95")
+
+        prev_seed = (state.get(cid) or {}).get("last_seed", None)
+        if prev_seed and prev_seed > 0:
+            cap_prev = prev_seed * (1.0 + SEED_GUARD_MAX_JUMP)
+            if seed > cap_prev:
+                seed = cap_prev
+                flags.append("prev+{:.0f}%".format(SEED_GUARD_MAX_JUMP*100))
+
+        if SEED_GUARD_ABS_MAX_PPM and seed > SEED_GUARD_ABS_MAX_PPM:
+            seed = float(SEED_GUARD_ABS_MAX_PPM)
+            flags.append("abs")
+
+    return float(seed), float(raw_p65), (float(p95) if p95 is not None else None), flags
 
 # ========== BOS ==========
 def bos_set_fee_ppm(to_pubkey, ppm_value):
@@ -297,7 +346,7 @@ def main(dry_run=False):
         channels_meta = {}
         open_cids = set()
         for (chan_id, chan_point, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
-            cid = str(chan_id)  # este 'chan_id' do LNDg costuma ser SCID DECIMAL
+            cid = str(chan_id)  # SCID DECIMAL
             channels_meta[cid] = {
                 "chan_point": chan_point,
                 "alias": alias or "Unknown",
@@ -319,7 +368,7 @@ def main(dry_run=False):
         channels_meta = {}
         open_cids = set()
         for (chan_id, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
-            cid = str(chan_id)  # ainda é SCID DECIMAL
+            cid = str(chan_id)
             channels_meta[cid] = {
                 "chan_point": None,
                 "alias": alias or "Unknown",
@@ -338,7 +387,7 @@ def main(dry_run=False):
     live_by_cid   = live["by_cid_dec"]
     live_by_point = live["by_point"]
 
-    # ---- Forwards (7d) para métricas de saída e in-volume por peer ----
+    # ---- Forwards (7d) ----
     cur.execute(SQL_FORWARDS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
     rows = cur.fetchall()
 
@@ -376,15 +425,12 @@ def main(dry_run=False):
     peer_count = max(1, len(incoming_msat_by_pub))
     avg_share = 1.0 / peer_count if peer_count > 0 else 0.0
 
-    # ---- Custo de rebal (7d) via gui_payments: GLOBAL e POR CANAL ----
+    # ---- Custo de rebal (7d) GLOBAL e POR CANAL ----
     cur.execute(SQL_REBAL_PAYMENTS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
     pay_rows = cur.fetchall()
 
-    # Global
     rebal_value_sat_global = 0
     rebal_fee_sat_global   = 0
-
-    # Por canal (key = rebal_chan, esperado como SCID decimal do LNDg)
     perchan_value_sat = defaultdict(int)
     perchan_fee_sat   = defaultdict(int)
 
@@ -412,7 +458,7 @@ def main(dry_run=False):
         alias = meta.get("alias", "Unknown")
         local_ppm = meta.get("local_ppm", 0)
 
-        # encontra o snapshot correto
+        # snapshot
         live_info = live_by_scid.get(cid)
         if (not live_info) and has_chan_point:
             cp = meta.get("chan_point")
@@ -435,22 +481,21 @@ def main(dry_run=False):
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
 
-        # Seed Amboss (p65) do peer
-        p65 = amboss_p65_incoming_ppm(pubkey, cache) if pubkey else None
-        if p65 is None:
-            p65 = 200.0  # fallback conservador
+        # Seed (Amboss) com guard
+        seed_used, seed_raw, seed_p95, seed_flags = seed_with_guard(pubkey, cache, state, cid)
+        if seed_used is None:
+            seed_used = 200.0  # fallback
 
         # Ponderação pelo volume de ENTRADA do peer
         if total_incoming_msat > 0 and VOLUME_WEIGHT_ALPHA > 0 and pubkey:
             share = incoming_msat_by_pub.get(pubkey, 0) / total_incoming_msat
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
-            p65 *= max(0.7, min(1.3, factor))
+            seed_used *= max(0.7, min(1.3, factor))
 
-        # --- Alvo BASE: seed + colchão (NÃO somar rebal no alvo) ---
-        target_base = p65 + COLCHAO_PPM
+        # --- Alvo BASE: seed + colchão (sem somar rebal) ---
+        target = seed_used + COLCHAO_PPM
 
-        # --- Ajuste por liquidez em cima do alvo-base ---
-        target = target_base
+        # --- Ajuste por liquidez ---
         if out_ratio < LOW_OUTBOUND_THRESH:
             target *= (1.0 + LOW_OUTBOUND_BUMP)
         elif out_ratio > HIGH_OUTBOUND_THRESH:
@@ -475,7 +520,7 @@ def main(dry_run=False):
                 new_ppm = clamp_ppm(int(new_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
-        # Piso de rebal conforme REBAL_COST_MODE (per_channel/global/blend) — AQUI o rebal atua!
+        # Piso de rebal conforme REBAL_COST_MODE
         if REBAL_FLOOR_ENABLE:
             base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan, rebal_cost_ppm_global)
             if base_cost > 0:
@@ -485,13 +530,14 @@ def main(dry_run=False):
         else:
             floor_ppm = MIN_PPM
 
-        # Garante que não fique abaixo do piso após o step-cap
         new_ppm = max(new_ppm, floor_ppm)
 
         # Aplica/relata
+        seed_note = f"{int(seed_used)}" + (" (cap)" if seed_flags else "")
         if new_ppm != local_ppm:
             if dry_run:
                 action = f"DRY set {local_ppm}→{new_ppm} ppm"
+                # em dry-run não grava STATE
             else:
                 try:
                     if pubkey:
@@ -502,18 +548,20 @@ def main(dry_run=False):
                             "last_ppm": new_ppm,
                             "last_dir": new_dir,
                             "last_ts":  now_ts,
-                            "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0)
+                            "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0),
+                            # guarda seed usado (pós-guard) para comparar na próxima rodada
+                            "last_seed": float(seed_used)
                         }
                     else:
                         action = "❌ sem pubkey/snapshot p/ aplicar"
                 except Exception as e:
                     action = f"❌ erro ao setar: {e}"
             report.append(
-                f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{int(p65)} | floor≥{floor_ppm}"
+                f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
         else:
             report.append(
-                f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | floor≥{floor_ppm}"
+                f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
 
     if unmatched > 0:
@@ -529,7 +577,7 @@ def main(dry_run=False):
         tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed, ponderação por entrada, liquidez, piso de rebal por canal e circuit-breaker)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso de rebal e circuit-breaker)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
