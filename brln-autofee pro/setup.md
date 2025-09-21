@@ -90,6 +90,13 @@ REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
 - `HIGH_OUTBOUND_CUT` — multiplicador quando muito outbound (ex.: **−20%**)
 - `IDLE_EXTRA_CUT` — corte extra se **ocioso** e outbound > 60% (ex.: **−10%**)
 
+### Escalada por persistência de baixo outbound
+`PERSISTENT_LOW_ENABLE   = True`    (habilita)
+`PERSISTENT_LOW_THRESH   = 0.15`    (considera "baixo" se < 15%)
+`PERSISTENT_LOW_BUMP     = 0.02`    (+2% no alvo por rodada de streak)
+`PERSISTENT_LOW_STREAK_MIN = 3`     (só começa a agir a partir de 3 rodadas seguidas)
+`PERSISTENT_LOW_MAX      = 0.10`    (teto de +10% acumulado)
+
 ### Ponderação por ENTRADA (seed)
 - `VOLUME_WEIGHT_ALPHA` — 0 desliga; **0.30** = ajuste moderado (±30% cap)
 

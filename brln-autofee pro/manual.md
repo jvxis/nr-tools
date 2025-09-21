@@ -158,6 +158,52 @@ Depende do modo abaixo:
   Ex.: `0.30` → alvo usa **30% global + 70% por canal**.
 
 ---
+# Escalada por persistência de baixo outbound (visão geral)
+
+**Motivo de existir:**
+Às vezes um canal fica **persistentemente com pouco saldo do seu lado** (`out_ratio` baixo) e **não reage** só com o ajuste de liquidez padrão (que dá um empurrão pequeno e imediato). A “escada” cria um **aumento progressivo no alvo** a cada rodada consecutiva nessa situação, até um teto. Isso:
+
+* desincentiva ainda mais a **saída** via esse canal (quando você já está drenado);
+* dá **tempo** para o mercado/rebalances corrigirem a liquidez;
+* evita saltos bruscos, porque respeita o **STEP\_CAP** e tem **teto acumulado**.
+
+> Em resumo: se o canal segue “seco” por várias rodadas, a taxa **sobe aos poucos** de forma controlada até forçar uma correção de rota/liquidez.
+
+---
+
+## Parâmetros
+
+* `PERSISTENT_LOW_ENABLE` — **Liga/desliga** a escada.
+  *Por que existe:* permitir experimentar ou comparar o comportamento com/sem escalada.
+
+* `PERSISTENT_LOW_THRESH` — Limiar de **out\_ratio** abaixo do qual a rodada conta como “baixa liquidez persistente”.
+  *Por que existe:* define “quando começa a doer”; use abaixo do seu `HIGH_OUTBOUND_THRESH` para detectar “baixo” antes do corte padrão.
+
+* `PERSISTENT_LOW_STREAK_MIN` — **Número mínimo de rodadas seguidas** abaixo do limiar para **começar a aplicar** o aumento acumulado.
+  *Por que existe:* evita reagir a flutuações pontuais; só age quando o problema é **persistente**.
+
+* `PERSISTENT_LOW_BUMP` — **Incremento percentual por rodada** de streak **depois** de atingir o mínimo.
+  *Por que existe:* controla o **ritmo** de escalada (ex.: +2% no alvo por rodada contínua).
+
+* `PERSISTENT_LOW_MAX` — **Teto** para o **acumulado** da escalada (ex.: +10% máx.).
+  *Por que existe:* garante que a escada **não fuja** e continue compatível com `STEP_CAP` e com a realidade do mercado.
+
+---
+
+### Como atua (em uma linha)
+
+Quando `out_ratio < PERSISTENT_LOW_THRESH` por `PERSISTENT_LOW_STREAK_MIN` rodadas, o alvo é multiplicado por
+`(1 + bump_acumulado)`, onde
+`bump_acumulado = min(PERSISTENT_LOW_MAX, (streak - STREAK_MIN + 1) * PERSISTENT_LOW_BUMP)`.
+
+---
+
+### Observações importantes
+
+* A escada **respeita `STEP_CAP`**: mesmo que o alvo suba +10%, a taxa **só anda** até o limite por rodada (ex.: 5%).
+* O streak **zera** assim que `out_ratio ≥ PERSISTENT_LOW_THRESH`.
+* O streak é salvo no **STATE**; ele **não avança** se você só roda em `--dry-run` (pois `STATE` não é gravado).
+
 # Parâmetros novos do **Seed Guard** (Amboss)
 
 ## Visão geral

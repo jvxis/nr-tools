@@ -41,13 +41,20 @@ LOW_OUTBOUND_BUMP   = 0.05   # +5% no alvo quando <5%
 HIGH_OUTBOUND_CUT   = 0.05   # -5% no alvo quando >30%
 IDLE_EXTRA_CUT      = 0.01   # corte extra por ociosidade (bem conservador)
 
-# --- peso do volume de ENTRADA do peer (Amboss) no alvo ---
-VOLUME_WEIGHT_ALPHA = 0.10   # ↓ suaviza influência (era 0.30)
+# --- escalada por persistência de baixo outbound ---
+PERSISTENT_LOW_ENABLE   = True
+PERSISTENT_LOW_THRESH   = 0.15   # considera "baixo" se < 15%
+PERSISTENT_LOW_BUMP     = 0.02   # +2% no alvo por rodada de streak
+PERSISTENT_LOW_STREAK_MIN = 3    # só começa a agir a partir de 3 rodadas seguidas
+PERSISTENT_LOW_MAX      = 0.10   # teto de +10% acumulado
 
-# --- circuit breaker (opcionalmente mais conservador) ---
+# --- peso do volume de ENTRADA do peer (Amboss) no alvo ---
+VOLUME_WEIGHT_ALPHA = 0.10
+
+# --- circuit breaker ---
 CB_WINDOW_DAYS = 7
-CB_DROP_RATIO  = 0.60   # ↑ só recua se os forwards caírem mais (era 0.50)
-CB_REDUCE_STEP = 0.15
+CB_DROP_RATIO  = 0.60
+CB_REDUCE_STEP = 0.10
 CB_GRACE_DAYS  = 10
 
 # --- Proteção de custo de rebal (PISO) ---
@@ -69,11 +76,12 @@ SEED_GUARD_ABS_MAX_PPM = 2000   # teto absoluto opcional (0/None para desativar)
 
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True     # liga/desliga
-OUTRATE_FLOOR_FACTOR      = 0.90     # 0.90 = não cair abaixo de 90% do out_ppm7d
+OUTRATE_FLOOR_FACTOR      = 1     # 0.90 = não cair abaixo de 90% do out_ppm7d
 OUTRATE_FLOOR_MIN_FWDS    = 5        # só vale se tiver pelo menos N forwards na janela
 
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
+
 
 # ========== HELPERS ==========
 def now_utc():
@@ -497,8 +505,26 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             seed_used *= max(0.7, min(1.3, factor))
 
+
+        
         # --- Alvo BASE: seed + colchão (sem somar rebal) ---
-        target = seed_used + COLCHAO_PPM
+        target_base = seed_used + COLCHAO_PPM
+        target = target_base
+
+        # --- Escalada por persistência de baixo outbound (ANTES do ajuste de liquidez) ---
+        streak = state.get(cid, {}).get("low_streak", 0)
+        if PERSISTENT_LOW_ENABLE:
+            if out_ratio < PERSISTENT_LOW_THRESH:
+                streak += 1
+            else:
+                streak = 0
+
+            if streak >= PERSISTENT_LOW_STREAK_MIN:
+                # bump acumulado limitado
+                bump_acc = (streak - PERSISTENT_LOW_STREAK_MIN + 1) * PERSISTENT_LOW_BUMP
+                bump_acc = min(PERSISTENT_LOW_MAX, max(0.0, bump_acc))
+                target *= (1.0 + bump_acc)
+                report.append(f"📈 Persistência: {alias} ({cid}) streak {streak} ⇒ bump {bump_acc*100:.0f}%")
 
         # --- Ajuste por liquidez ---
         if out_ratio < LOW_OUTBOUND_THRESH:
@@ -556,13 +582,13 @@ def main(dry_run=False):
                         action = f"set {local_ppm}→{new_ppm} ppm"
                         new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
                         state[cid] = {
-                            "last_ppm": new_ppm,
-                            "last_dir": new_dir,
-                            "last_ts":  now_ts,
-                            "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0),
-                            # guarda seed usado (pós-guard) para comparar na próxima rodada
-                            "last_seed": float(seed_used)
+                        "last_ppm": new_ppm,
+                        "last_dir": new_dir,
+                        "last_ts":  now_ts,
+                        "baseline_fwd7d": fwd_count if fwd_count > 0 else state_all.get("baseline_fwd7d", 0),
+                        "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
                         }
+
                     else:
                         action = "❌ sem pubkey/snapshot p/ aplicar"
                 except Exception as e:
