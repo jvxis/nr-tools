@@ -158,6 +158,140 @@ Depende do modo abaixo:
   Ex.: `0.30` → alvo usa **30% global + 70% por canal**.
 
 ---
+# Parâmetros novos do **Seed Guard** (Amboss)
+
+## Visão geral
+
+O *seed* é a estimativa de preço de entrada do seu peer (Amboss, métrica `incoming_fee_rate_metrics.weighted_corrected_mean`). Em mercados voláteis, essa métrica pode “espikar” e empurrar o **alvo** para valores absurdos.
+O **Seed Guard** suaviza esses picos antes do seed entrar no cálculo do alvo.
+
+> Lembrete do alvo: **target = seed\_capado + COLCHAO\_PPM**, depois ajustado por liquidez.
+> O **custo de rebal** não entra no alvo — ele é usado **só como piso (floor)**, conforme `REBAL_COST_MODE`.
+
+---
+
+## Parâmetros novos
+
+### `SEED_GUARD_ENABLE` *(bool)*
+
+* **O que faz:** Liga/desliga todas as proteções do seed.
+* **Padrão sugerido:** `True`
+* **Quando mudar:** Desative apenas para depurar ou comparar comportamento “cru”.
+
+---
+
+### `SEED_GUARD_MAX_JUMP` *(float, 0–1)*
+
+* **O que faz:** Limita o **salto máximo** do seed em relação ao **seed anterior do mesmo canal** (gravado no `STATE`).
+* **Exemplo:** `0.50` ⇒ o seed desta rodada não pode crescer mais de **50%** sobre o `last_seed`.
+* **Efeito prático:** Evita que um *spike* único de mercado estoure seu alvo numa única rodada.
+* **Padrão sugerido:** `0.50`
+* **Aperte mais se ver picos frequentes:** `0.25` (25%) ou até `0.15`.
+
+> ⚠️ O `last_seed` **só é salvo** quando você roda **sem** `--dry-run`. Em `--dry-run`, o guard usa o histórico já gravado.
+
+---
+
+### `SEED_GUARD_P95_CAP` *(bool)*
+
+* **O que faz:** Calcula o **percentil 95 (p95)** da **série 7d** do Amboss e **capa** o seed a esse p95.
+* **Motivação:** Picos muito recentes costumam aparecer acima do p95 — cortar nesses casos remove outliers sem perder a tendência.
+* **Padrão sugerido:** `True`
+* **Quando desligar:** Se quiser ver o seed “cru” para auditoria.
+
+---
+
+### `SEED_GUARD_ABS_MAX_PPM` *(int ou 0)*
+
+* **O que faz:** Define um **teto absoluto** para o seed (em ppm). Se `0` ou `None`, não aplica teto.
+* **Padrão sugerido:** `2000`
+* **Quando reduzir:** Se você quer uma política **sempre** abaixo de um certo nível (ex.: `1500`).
+* **Quando aumentar:** Se atua em nichos de alto custo e precisa permitir seeds elevados (ex.: `3000`), lembrando que o `MAX_PPM` global ainda limita a taxa final.
+
+---
+
+## Como o Seed Guard decide (ordem das travas)
+
+Para cada canal:
+
+1. Busca série 7d do Amboss e calcula o **p65 bruto** (seed “cru”).
+2. **p95-cap** (se ligado): `seed = min(seed, p95)`.
+3. **Max jump vs anterior**: `seed ≤ last_seed * (1 + SEED_GUARD_MAX_JUMP)`.
+4. **Teto absoluto**: `seed ≤ SEED_GUARD_ABS_MAX_PPM` (se > 0).
+5. O **seed capado** vira `seed_usado` no **alvo**: `target = seed_usado + COLCHAO_PPM`.
+
+> Dica: no relatório aparece `seed≈<valor>` e, se foi capado por qualquer trava, `seed≈<valor> (cap)`.
+
+---
+
+## Interações importantes
+
+* **`COLCHAO_PPM`**: é somado ao seed **após** o guard. Aumente se quiser margem fixa maior acima do preço de entrada.
+* **Liquidez (`out_ratio`)**: depois do `seed+colchão`, aplicam-se os ajustes:
+
+  * drenado (`< LOW_OUTBOUND_THRESH`) ⇒ leve **alta**,
+  * sobra (> `HIGH_OUTBOUND_THRESH`) ⇒ leve **queda**, com corte extra se estiver ocioso.
+* **Rebal cost**: **não** soma no alvo. É usado **apenas como piso** via `REBAL_COST_MODE`:
+
+  * `per_channel`: piso pelo custo do **próprio canal** (fallback para global se sem histórico),
+  * `global`: piso pelo custo **global**,
+  * `blend`: piso pela **mistura** `λ*global + (1-λ)*canal`.
+
+---
+
+## Exemplos rápidos
+
+* **Spike absurdo no peer (tipo Kappa)**
+  Config:
+
+  ```py
+  SEED_GUARD_ENABLE = True
+  SEED_GUARD_MAX_JUMP = 0.25
+  SEED_GUARD_P95_CAP = True
+  SEED_GUARD_ABS_MAX_PPM = 1800
+  ```
+
+  Efeito: o seed não sobe mais que 25% vs rodada anterior, é cortado no p95 da série e nunca passa de 1800 ppm.
+
+* **Ambiente estável, menos travas**
+
+  ```py
+  SEED_GUARD_ENABLE = True
+  SEED_GUARD_MAX_JUMP = 0.60
+  SEED_GUARD_P95_CAP = False
+  SEED_GUARD_ABS_MAX_PPM = 0
+  ```
+
+  Efeito: só limita salto por histórico, aceita picos respeitando `MAX_PPM`.
+
+---
+
+## Boas práticas de operação
+
+* **Rodadas “a seco” (`--dry-run`)** em cron e **aplicação real** manual/alternada:
+  Você inspeciona os “cap” no seed antes de aplicar. Lembre que **dry-run não atualiza `last_seed`**.
+* Se o seed **vive capado**, avalie:
+
+  * Aumentar `COLCHAO_PPM` (se está muito “no osso”),
+  * Relaxar `SEED_GUARD_MAX_JUMP` **ou** subir `SEED_GUARD_ABS_MAX_PPM`,
+  * Ver se o peer realmente ficou mais caro de entrar (mudança estrutural de rota).
+* Se o seed **quase nunca é capado**, mas ainda acha “alto/baixo”:
+
+  * Ajuste `VOLUME_WEIGHT_ALPHA` (peso do volume de entrada),
+  * Revise `HIGH_OUTBOUND_CUT`/`LOW_OUTBOUND_BUMP`.
+
+---
+
+## Tabela-resumo (valores sugeridos)
+
+| Parâmetro                | Sugerido | Papel                                  |
+| ------------------------ | -------- | -------------------------------------- |
+| `SEED_GUARD_ENABLE`      | `True`   | Liga o guard                           |
+| `SEED_GUARD_MAX_JUMP`    | `0.50`   | Limite +50% vs seed anterior por canal |
+| `SEED_GUARD_P95_CAP`     | `True`   | Corta seed acima do p95 da série 7d    |
+| `SEED_GUARD_ABS_MAX_PPM` | `2000`   | Teto absoluto do seed (0=desativa)     |
+
+
 
 ## Como escolher valores (receitas rápidas)
 
@@ -196,4 +330,13 @@ Depende do modo abaixo:
 * **Esquecer que `BASE_FEE_MSAT` não é aplicado:** se quiser base fee ≠ 0, é preciso estender a chamada do `bos`.
 
 ---
+## FAQ
 
+**Q: Dry-run altera o `last_seed`?**
+A: Não. Só salva `last_seed` (e outras métricas do STATE) quando **aplica de verdade** (sem `--dry-run`).
+
+**Q: Vejo `seed (cap)` no relatório. O que exatamente foi capado?**
+A: Pelo menos uma trava atuou (p95, salto vs anterior, ou teto absoluto). O valor mostrado já é o seed **após** o cap.
+
+**Q: O piso (floor) ainda dispara subidas quando o rebal encarece?**
+A: Sim, por design. O custo de rebal 7d protege sua margem mínima. Se esse custo sobe, o **floor** sobe. Se não quiser isso, mude `REBAL_COST_MODE` para `global` ou `blend` (mais estável), ou reduza `REBAL_FLOOR_MARGIN`.
