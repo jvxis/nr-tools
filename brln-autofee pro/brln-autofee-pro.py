@@ -67,6 +67,11 @@ SEED_GUARD_MAX_JUMP    = 0.50   # máx +50% vs seed anterior gravado no STATE
 SEED_GUARD_P95_CAP     = True   # cap no P95 da série 7d do Amboss
 SEED_GUARD_ABS_MAX_PPM = 2000   # teto absoluto opcional (0/None para desativar)
 
+# --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
+OUTRATE_FLOOR_ENABLE      = True     # liga/desliga
+OUTRATE_FLOOR_FACTOR      = 0.90     # 0.90 = não cair abaixo de 90% do out_ppm7d
+OUTRATE_FLOOR_MIN_FWDS    = 5        # só vale se tiver pelo menos N forwards na janela
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -529,6 +534,12 @@ def main(dry_run=False):
                 floor_ppm = MIN_PPM
         else:
             floor_ppm = MIN_PPM
+            
+        # Piso adicional pelo out_ppm7d (se houver amostragem suficiente)
+        if OUTRATE_FLOOR_ENABLE and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
+            outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * OUTRATE_FLOOR_FACTOR))
+            floor_ppm = max(floor_ppm, outrate_floor)
+
 
         new_ppm = max(new_ppm, floor_ppm)
 

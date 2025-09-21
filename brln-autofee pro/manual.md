@@ -239,6 +239,7 @@ Para cada canal:
 
 ---
 
+
 ## Exemplos rápidos
 
 * **Spike absurdo no peer (tipo Kappa)**
@@ -307,18 +308,136 @@ Para cada canal:
 
 ---
 
+# Manual do “Piso pelo Out-Rate” (`out_ppm7d`)
+
+Este módulo opcional impede que a taxa caia **abaixo do que o canal efetivamente cobrou** nos últimos 7 dias, usando o **histórico de forwards** como um “piso” adicional. Ele se soma ao piso já existente de **custo de rebal**.
+
+---
+
+## Parâmetros
+
+### `OUTRATE_FLOOR_ENABLE` (bool)
+
+* **O que faz:** Liga/desliga o piso baseado no **out\_ppm7d** (média de ppm efetiva dos forwards de saída na janela).
+* **Quando atua:** Apenas quando há forwards suficientes na janela (ver `OUTRATE_FLOOR_MIN_FWDS`).
+* **Padrão sugerido:** `True`
+* **Use quando:** Você quer evitar reduzir a taxa para baixo do que o canal comprovadamente conseguiu cobrar recentemente.
+
+---
+
+### `OUTRATE_FLOOR_FACTOR` (float, 0–1.5)
+
+* **O que faz:** Fatora o `out_ppm7d` para formar o piso.
+* **Fórmula:** `outrate_floor = ceil(out_ppm7d * OUTRATE_FLOOR_FACTOR)`
+* **Efeito prático:**
+
+  * `0.90` → **não descer** abaixo de \~90% do `out_ppm7d`.
+  * `1.00` → **não descer** abaixo do `out_ppm7d` integral (mais rígido, pode “prender” a taxa).
+  * `>1.00` → piso **acima** do out-rate; raramente desejável.
+* **Faixa recomendada:** `0.80 – 0.95`
+* **Padrão sugerido:** `0.90`
+
+---
+
+### `OUTRATE_FLOOR_MIN_FWDS` (int)
+
+* **O que faz:** Exige um **mínimo de forwards** na janela para considerar `out_ppm7d` estatisticamente confiável.
+* **Por quê:** Evita “grudar” taxa por causa de 1–2 forwards atípicos.
+* **Padrão sugerido:** `5`
+* **Ajuste conforme volume:**
+
+  * Canais de **alto** volume: 10–20
+  * Canais de **baixo** volume: 3–5
+
+---
+
+## Como o piso pelo out-rate se combina com o piso de rebal
+
+* O **piso efetivo** é:
+  **`floor_ppm_final = max( piso_rebal , outrate_floor )`**
+* `piso_rebal` vem da sua estratégia de custo: **per\_channel**, **global** ou **blend** (com margem `REBAL_FLOOR_MARGIN`).
+* Se **não houver** forwards suficientes (`fwd_count < OUTRATE_FLOOR_MIN_FWDS`) ou `out_ppm7d == 0`, **o piso pelo out-rate não atua** — vale só o piso de rebal.
+
+---
+
+## Ordem das etapas (resumo mental)
+
+1. **Alvo-base**: `target_base = seed_p65 + COLCHAO_PPM`
+2. **Ajuste por liquidez** (LOW/HIGH outbound) → `target`
+3. **Step-cap**: aproxima taxa atual até `target` com limite de variação por rodada
+4. **Pisos**:
+
+   * Piso de **rebal** (global/per-channel/blend)
+   * Piso por **out-rate** (se habilitado e com forwards suficientes)
+     → **aplica o maior dos pisos**
+5. **Resultado final**: `new_ppm = max(step_capped_target, floor_ppm_final)`
+
+---
+
+## Exemplos rápidos
+
+### 1) Canal com histórico bom
+
+* `out_ppm7d = 300`, `fwd_count = 12`
+* `OUTRATE_FLOOR_FACTOR = 0.90` ⇒ `outrate_floor = 270`
+* `piso_rebal = 220` ⇒ **piso final = 270**
+* Se o `target` vier abaixo de 270, o script **não** desce além de 270.
+
+### 2) Canal novo ou quase sem forwards
+
+* `fwd_count = 1` (< `OUTRATE_FLOOR_MIN_FWDS`) ⇒ **piso por out-rate inativo**
+* Piso vem **só do rebal** (per-channel/global/blend)
+* Taxa pode cair (ou subir) sem “travar” por out\_ppm7d.
+
+### 3) Canal caro por rebal
+
+* `piso_rebal = 1200`, `out_ppm7d = 400`
+* `outrate_floor = 360` ⇒ **piso final = 1200**
+* O custo de rebal “manda” no piso — evita prejuízo ao reequilibrar.
+
+---
+
+## Recomendações de uso
+
+* **Comece com:**
+
+  ```python
+  OUTRATE_FLOOR_ENABLE   = True
+  OUTRATE_FLOOR_FACTOR   = 0.90
+  OUTRATE_FLOOR_MIN_FWDS = 5
+  ```
+* Se perceber que taxas **não descem** quando o mercado esfria, reduza o **FACTOR** (ex.: 0.85).
+* Se o canal tem **muito ruído** (poucos forwards na janela), aumente o **MIN\_FWDS**.
+* **Evite 1.00** em `OUTRATE_FLOOR_FACTOR` se você quer que o preço siga o mercado para baixo.
+
+---
+
+## Dúvidas frequentes
+
+**“Isso pode impedir quedas saudáveis de taxa?”**
+Pode, se você definir um fator alto (≥1.0) ou um mínimo de forwards muito baixo — ajuste com parcimônia.
+
+**“E se o out\_ppm7d for artificialmente alto por alguns forwards raros?”**
+É por isso que existe `OUTRATE_FLOOR_MIN_FWDS`. Aumente o mínimo para exigir mais amostragem antes de ativar o piso.
+
+**“Qual piso prevalece?”**
+Sempre o **maior** entre rebal e out-rate.
+
+---
+
 ## Exemplo numérico (cálculo do alvo)
 
 1. **Seed (Amboss)** ajustado pelo volume do peer: `p65 = 380 ppm`.
-2. **Custo de rebal (per\_channel)** 7 d: `700 ppm`.
-3. **Colchão:** `+30` → `380 + 700 + 30 = 1.110 ppm`.
-4. **Liquidez:** `out_ratio = 0.03` (< 0.05) ⇒ `LOW_OUTBOUND_BUMP = +5%`
-   → alvo `1.110 * 1.05 = 1.165 ppm`.
-5. **Clamp:** dentro de `MIN..MAX`, então segue.
-6. **STEP\_CAP:** fee atual é `900 ppm`. Com 5%/rodada, novo vai para
-   `900 + 5% de 900 = 945 ppm` (ainda **abaixo** do alvo, vai subindo aos poucos nas próximas execuções).
-7. **Piso de rebal:** custo=700 ppm, margem 10% → piso `770 ppm`.
-   `945` > `770` → ok.
+2. **Alvo-base** = **seed + colchão** = `380 + 30 = 410 ppm`.
+3. **Liquidez**: `out_ratio = 0.03` (< 0.05) ⇒ `LOW_OUTBOUND_BUMP = +5%`
+   → **alvo** = `410 * 1.05 = 430,5` ⇒ **431 ppm** (arredondado).
+4. **Clamp**: 431 está entre `MIN_PPM..MAX_PPM` ⇒ ok.
+5. **STEP\_CAP**: fee atual = `900 ppm`. Com 5%/rodada e alvo **menor**, desce no máx. `900 * 0.05 = 45`
+   → nova fee provisória = `900 − 45 = 855 ppm`.
+6. **Piso de rebal**: custo=`700 ppm`, margem 10% ⇒ piso = `700 * 1,10 = 770 ppm`.
+7. **Resultado final**: `max(855, 770) = 855 ppm`.
+   → A fee cai de **900 → 855 ppm**, **sem** somar custo de rebal no alvo (o rebal é usado apenas como **floor**).
+
 
 ---
 

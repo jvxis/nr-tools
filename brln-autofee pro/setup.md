@@ -94,9 +94,32 @@ REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
 - `VOLUME_WEIGHT_ALPHA` — 0 desliga; **0.30** = ajuste moderado (±30% cap)
 
 ### Circuit Breaker
+- `CB_WINDOW_DAYS = 7`
 - `CB_DROP_RATIO` — ex.: **0.60** (queda para 60% do baseline dispara CB)
 - `CB_REDUCE_STEP` — ex.: **0.15** (−15% no alvo quando CB aciona)
 - `CB_GRACE_DAYS` — ex.: **10** dias para observar a queda pós-alta
+
+### Proteção de custo de rebal (PISO)
+- `REBAL_FLOOR_ENABLE = True`     (habilita piso de segurança)
+- `REBAL_FLOOR_MARGIN = 0.10`     (10% acima do custo médio de rebal 7d)
+
+### Composição do custo no ALVO ---
+- "global"      = usa só o custo global 7d
+- "per_channel" = usa só o custo por canal 7d
+- "blend"       = mistura global e por canal
+- `REBAL_COST_MODE = "per_channel"`
+- `REBAL_BLEND_LAMBDA = 0.30`     (se "blend": 30% global, 70% canal)
+
+### Guard de anomalias do seed (Amboss p65) ---
+- `SEED_GUARD_ENABLE      = True`   
+- `SEED_GUARD_MAX_JUMP    = 0.50`   (máx +50% vs seed anterior gravado no STATE)
+- `SEED_GUARD_P95_CAP     = True`   (cap no P95 da série 7d do Amboss)
+- `SEED_GUARD_ABS_MAX_PPM = 2000`   (teto absoluto opcional 0/None para desativar)
+
+### Piso opcional pelo out_ppm7d (histórico de forwards) ---
+- `OUTRATE_FLOOR_ENABLE      = True`     (liga/desliga)
+- `OUTRATE_FLOOR_FACTOR      = 0.90`     (0.90 = não cair abaixo de 90% do out_ppm7d)
+- `OUTRATE_FLOOR_MIN_FWDS    = 5`        (só vale se tiver pelo menos N forwards na janela)
 
 ### Exclusões (opcional)
 - `EXCLUSION_LIST = set()` — adicione pubkeys para **ignorar** ajustes nesses peers
