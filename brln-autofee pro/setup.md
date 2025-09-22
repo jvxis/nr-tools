@@ -97,6 +97,9 @@ REBAL_BLEND_LAMBDA = 0.30     # se "blend": 30% global, 70% canal
 `PERSISTENT_LOW_STREAK_MIN = 3`     (só começa a agir a partir de 3 rodadas seguidas)
 `PERSISTENT_LOW_MAX      = 0.10`    (teto de +10% acumulado)
 
+`PERSISTENT_LOW_OVER_CURRENT_ENABLE = True`  (se alvo <= taxa atual, escalar "over current")
+`PERSISTENT_LOW_MIN_STEP_PPM        = 5`     (passo mínimo quando escalando "over current")
+
 ### Ponderação por ENTRADA (seed)
 - `VOLUME_WEIGHT_ALPHA` — 0 desliga; **0.30** = ajuste moderado (±30% cap)
 

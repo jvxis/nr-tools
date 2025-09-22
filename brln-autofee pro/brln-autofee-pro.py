@@ -42,11 +42,14 @@ HIGH_OUTBOUND_CUT   = 0.05   # -5% no alvo quando >30%
 IDLE_EXTRA_CUT      = 0.01   # corte extra por ociosidade (bem conservador)
 
 # --- escalada por persistência de baixo outbound ---
-PERSISTENT_LOW_ENABLE   = True
-PERSISTENT_LOW_THRESH   = 0.15   # considera "baixo" se < 15%
-PERSISTENT_LOW_BUMP     = 0.02   # +2% no alvo por rodada de streak
-PERSISTENT_LOW_STREAK_MIN = 3    # só começa a agir a partir de 3 rodadas seguidas
-PERSISTENT_LOW_MAX      = 0.10   # teto de +10% acumulado
+PERSISTENT_LOW_ENABLE        = True
+PERSISTENT_LOW_THRESH        = 0.10   # considera "baixo" se < 10%
+PERSISTENT_LOW_BUMP          = 0.05   # +5% no alvo por rodada de streak
+PERSISTENT_LOW_STREAK_MIN    = 3      # só começa a agir a partir de 3 rodadas seguidas
+PERSISTENT_LOW_MAX           = 0.20   # teto de +20% acumulado
+# >>> NOVAS FLAGS:
+PERSISTENT_LOW_OVER_CURRENT_ENABLE = True  # se alvo <= taxa atual, escalar "over current"
+PERSISTENT_LOW_MIN_STEP_PPM        = 5     # passo mínimo quando escalando "over current"
 
 # --- peso do volume de ENTRADA do peer (Amboss) no alvo ---
 VOLUME_WEIGHT_ALPHA = 0.10
@@ -505,7 +508,7 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             seed_used *= max(0.7, min(1.3, factor))
 
-        # <<< ADIÇÃO: persistir last_seed cedo (sem dry-run não grava em disco; apenas preparara o STATE)
+        # persistir last_seed cedo (em memória; gravação em disco só sem --dry-run)
         if not dry_run:
             st_tmp = state.get(cid, {}).copy()
             st_tmp["last_seed"] = float(seed_used)
@@ -527,8 +530,21 @@ def main(dry_run=False):
                 # bump acumulado limitado
                 bump_acc = (streak - PERSISTENT_LOW_STREAK_MIN + 1) * PERSISTENT_LOW_BUMP
                 bump_acc = min(PERSISTENT_LOW_MAX, max(0.0, bump_acc))
-                target *= (1.0 + bump_acc)
-                report.append(f"📈 Persistência: {alias} ({cid}) streak {streak} ⇒ bump {bump_acc*100:.0f}%")
+                bump_mult = 1.0 + bump_acc
+
+                bump_mode = "seed"
+                if PERSISTENT_LOW_OVER_CURRENT_ENABLE and target <= local_ppm:
+                    # >>> NOVO: escalada "over current"
+                    target = max(
+                        target,
+                        int(math.ceil(local_ppm * bump_mult)),
+                        local_ppm + int(PERSISTENT_LOW_MIN_STEP_PPM or 0)
+                    )
+                    bump_mode = "over_current"
+                else:
+                    target = int(math.ceil(target * bump_mult))
+
+                report.append(f"📈 Persistência: {alias} ({cid}) streak {streak} ⇒ bump {bump_acc*100:.0f}% ({bump_mode})")
 
         # --- Ajuste por liquidez ---
         if out_ratio < LOW_OUTBOUND_THRESH:
@@ -564,7 +580,7 @@ def main(dry_run=False):
                 floor_ppm = MIN_PPM
         else:
             floor_ppm = MIN_PPM
-            
+
         # Piso adicional pelo out_ppm7d (se houver amostragem suficiente)
         if OUTRATE_FLOOR_ENABLE and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * OUTRATE_FLOOR_FACTOR))
@@ -585,7 +601,7 @@ def main(dry_run=False):
                         action = f"set {local_ppm}→{new_ppm} ppm"
                         new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
 
-                        # <<< ADIÇÃO: atualizar STATE preservando chaves e incluindo last_seed
+                        # atualizar STATE preservando chaves e incluindo last_seed
                         st = state.get(cid, {}).copy()
                         st.update({
                             "last_ppm": new_ppm,
@@ -604,7 +620,7 @@ def main(dry_run=False):
                 f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
         else:
-            # <<< ADIÇÃO: mesmo sem mudar fee, persiste low_streak e last_seed (quando não for dry-run)
+            # mesmo sem mudar fee, persiste low_streak e last_seed (quando não for dry-run)
             if not dry_run:
                 st = state.get(cid, {}).copy()
                 st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
@@ -628,7 +644,7 @@ def main(dry_run=False):
         tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso de rebal e circuit-breaker)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso de rebal, persistência over-current e circuit-breaker)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
