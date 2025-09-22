@@ -26,7 +26,7 @@ STATE_PATH    = "/home/admin/.cache/auto_fee_state.json"
 # --- limites base ---
 BASE_FEE_MSAT = 0
 MIN_PPM = 150          # ↑ protege receita mínima
-MAX_PPM = 2500
+MAX_PPM = 1500
 
 # --- “velocidade” de mudança por execução ---
 STEP_CAP = 0.05        # ↓ muda no máx. 5% por rodada (era 0.20)
@@ -534,7 +534,7 @@ def main(dry_run=False):
 
                 bump_mode = "seed"
                 if PERSISTENT_LOW_OVER_CURRENT_ENABLE and target <= local_ppm:
-                    # >>> NOVO: escalada "over current"
+                    # escalada "over current": garante sair de local_ppm pra cima
                     target = max(
                         target,
                         int(math.ceil(local_ppm * bump_mult)),
@@ -555,6 +555,14 @@ def main(dry_run=False):
                 target *= (1.0 - IDLE_EXTRA_CUT)
 
         target = clamp_ppm(target)
+
+        # ===== NOVO BLOCO: Guardas para cenário "low outbound" (depois da liquidez) =====
+        pl_tags = []
+        # 1) No-down while low: não deixar alvo < taxa atual quando está baixo
+        if out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
+            target = local_ppm
+            pl_tags.append("no-down-low")
+        # ================================================================================
 
         # Circuit breaker
         state_all = state.get(cid, {})
@@ -590,10 +598,14 @@ def main(dry_run=False):
 
         # Aplica/relata
         seed_note = f"{int(seed_used)}" + (" (cap)" if seed_flags else "")
+        dir_for_emoji = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
+        emo = "🔺" if dir_for_emoji == "up" else ("🔻" if dir_for_emoji == "down" else "⏸️")
+        tag_note = ((" | " + " ".join(pl_tags)) if pl_tags else "")
+
         if new_ppm != local_ppm:
             if dry_run:
                 action = f"DRY set {local_ppm}→{new_ppm} ppm"
-                # em dry-run não grava STATE
+                new_dir = dir_for_emoji  # só p/ log
             else:
                 try:
                     if pubkey:
@@ -614,10 +626,12 @@ def main(dry_run=False):
                         state[cid] = st
                     else:
                         action = "❌ sem pubkey/snapshot p/ aplicar"
+                        new_dir = "flat"
                 except Exception as e:
                     action = f"❌ erro ao setar: {e}"
+                    new_dir = "flat"
             report.append(
-                f"✅ {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
+                f"✅{emo} {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}{tag_note}"
             )
         else:
             # mesmo sem mudar fee, persiste low_streak e last_seed (quando não for dry-run)
@@ -628,7 +642,7 @@ def main(dry_run=False):
                 state[cid] = st
 
             report.append(
-                f"🫤 {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
+                f"🫤⏸️ {alias}: mantém {local_ppm} ppm | alvo {target}{tag_note} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
 
     if unmatched > 0:
