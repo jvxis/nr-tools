@@ -467,6 +467,10 @@ def main(dry_run=False):
     report = []
     report.append(f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)")
 
+    # --- métricas p/ resumo ---
+    changed_up = changed_down = kept = 0
+    low_out_count = 0
+
     unmatched = 0
 
     for cid in sorted(open_cids):
@@ -493,6 +497,8 @@ def main(dry_run=False):
         cap   = int((live_info or {}).get("capacity", 0))
         local = int((live_info or {}).get("local_balance", 0))
         out_ratio = (local / cap) if cap > 0 else 0.5
+        if out_ratio < PERSISTENT_LOW_THRESH:
+            low_out_count += 1
 
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
@@ -507,6 +513,13 @@ def main(dry_run=False):
             share = incoming_msat_by_pub.get(pubkey, 0) / total_incoming_msat
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             seed_used *= max(0.7, min(1.3, factor))
+
+        # tags do guard do seed (com emoji)
+        seed_tags = []
+        for fl in (seed_flags or []):
+            if fl == "p95": seed_tags.append("🧬seedcap:p95")
+            elif fl.startswith("prev+"): seed_tags.append("🧬seedcap:" + fl)  # ex: prev+50%
+            elif fl == "abs": seed_tags.append("🧬seedcap:abs")
 
         # persistir last_seed cedo (em memória; gravação em disco só sem --dry-run)
         if not dry_run:
@@ -556,27 +569,28 @@ def main(dry_run=False):
 
         target = clamp_ppm(target)
 
-        # ===== NOVO BLOCO: Guardas para cenário "low outbound" (depois da liquidez) =====
+        # ===== Guardas para cenário "low outbound" (depois da liquidez) =====
         pl_tags = []
         # 1) No-down while low: não deixar alvo < taxa atual quando está baixo
         if out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
             target = local_ppm
-            pl_tags.append("no-down-low")
-        # ================================================================================
+            pl_tags.append("🙅‍♂️no-down-low")
+        # ====================================================================
 
-        # Circuit breaker
+        # ---- STEP CAP antes do piso (para diagnosticar) ----
+        raw_step_ppm = target if local_ppm == 0 else apply_step_cap(local_ppm, target)
+
+        now_ts = int(time.time())
+        # Circuit breaker atua sobre raw_step_ppm
         state_all = state.get(cid, {})
         last_ppm  = state_all.get("last_ppm", local_ppm)
         last_dir  = state_all.get("last_dir", "flat")
         last_ts   = state_all.get("last_ts", 0)
         baseline  = state_all.get("baseline_fwd7d", None)
 
-        new_ppm = target if local_ppm == 0 else apply_step_cap(local_ppm, target)
-
-        now_ts = int(time.time())
         if last_dir == "up" and (now_ts - last_ts) <= CB_GRACE_DAYS*24*3600 and baseline:
             if baseline > 0 and fwd_count < baseline * CB_DROP_RATIO:
-                new_ppm = clamp_ppm(int(new_ppm * (1.0 - CB_REDUCE_STEP)))
+                raw_step_ppm = clamp_ppm(int(raw_step_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
         # Piso de rebal conforme REBAL_COST_MODE
@@ -594,26 +608,44 @@ def main(dry_run=False):
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * OUTRATE_FLOOR_FACTOR))
             floor_ppm = max(floor_ppm, outrate_floor)
 
-        new_ppm = max(new_ppm, floor_ppm)
+        final_ppm = max(raw_step_ppm, floor_ppm)
+
+        # Diagnóstico: stepcap / floor-lock
+        diag_tags = []
+        if raw_step_ppm != target:
+            # moveu na direção do target mas limitado
+            dir_same = (target > local_ppm and raw_step_ppm > local_ppm) or (target < local_ppm and raw_step_ppm < local_ppm)
+            if dir_same:
+                diag_tags.append("⛔stepcap")
+        if final_ppm < target and final_ppm == floor_ppm:
+            diag_tags.append("🧱floor-lock")
+        # (opcional) travou exatamente no atual por arredondamento/cap
+        if final_ppm == local_ppm and target != local_ppm and floor_ppm <= local_ppm:
+            diag_tags.append("⛔stepcap-lock")
+
+        all_tags = pl_tags + seed_tags + diag_tags
+        new_ppm = final_ppm
 
         # Aplica/relata
         seed_note = f"{int(seed_used)}" + (" (cap)" if seed_flags else "")
         dir_for_emoji = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
         emo = "🔺" if dir_for_emoji == "up" else ("🔻" if dir_for_emoji == "down" else "⏸️")
-        tag_note = ((" | " + " ".join(pl_tags)) if pl_tags else "")
+        tag_note = (" " + " ".join(all_tags)) if all_tags else ""
 
         if new_ppm != local_ppm:
+            delta = new_ppm - local_ppm
+            pct = (abs(delta) / local_ppm * 100.0) if local_ppm > 0 else 0.0
+            dstr = f"{'+' if delta>0 else ''}{delta} ({pct:.1f}%)"
+
             if dry_run:
-                action = f"DRY set {local_ppm}→{new_ppm} ppm"
-                new_dir = dir_for_emoji  # só p/ log
+                action = f"DRY set {local_ppm}→{new_ppm} ppm {dstr}"
+                new_dir = dir_for_emoji
             else:
                 try:
                     if pubkey:
                         bos_set_fee_ppm(pubkey, new_ppm)
-                        action = f"set {local_ppm}→{new_ppm} ppm"
-                        new_dir = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
-
-                        # atualizar STATE preservando chaves e incluindo last_seed
+                        action = f"set {local_ppm}→{new_ppm} ppm {dstr}"
+                        new_dir = dir_for_emoji
                         st = state.get(cid, {}).copy()
                         st.update({
                             "last_ppm": new_ppm,
@@ -630,20 +662,27 @@ def main(dry_run=False):
                 except Exception as e:
                     action = f"❌ erro ao setar: {e}"
                     new_dir = "flat"
+
             report.append(
-                f"✅{emo} {alias}: {action} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}{tag_note}"
+                f"✅{emo} {alias}: {action} | alvo {target}{(' | ' + ' '.join(all_tags)) if all_tags else ''} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
+            if new_ppm > local_ppm: changed_up += 1
+            else: changed_down += 1
+
         else:
-            # mesmo sem mudar fee, persiste low_streak e last_seed (quando não for dry-run)
             if not dry_run:
                 st = state.get(cid, {}).copy()
                 st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
                 st["last_seed"] = float(seed_used)
                 state[cid] = st
 
+            kept += 1
             report.append(
                 f"🫤⏸️ {alias}: mantém {local_ppm} ppm | alvo {target}{tag_note} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
             )
+
+    # resumo na 2ª linha do relatório
+    report.insert(1, f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count}")
 
     if unmatched > 0:
         report.append(f"ℹ️  {unmatched} canal(is) sem snapshot por scid/chan_point (out_ratio=0.50 por fallback). Cheque versão do lncli e permissões.")
@@ -658,7 +697,8 @@ def main(dry_run=False):
         tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso de rebal, persistência over-current e circuit-breaker)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso, persistência over-current e circuit-breaker)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
+
