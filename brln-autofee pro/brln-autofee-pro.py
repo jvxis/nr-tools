@@ -82,6 +82,55 @@ OUTRATE_FLOOR_ENABLE      = True     # liga/desliga
 OUTRATE_FLOOR_FACTOR      = 1     # 0.90 = não cair abaixo de 90% do out_ppm7d
 OUTRATE_FLOOR_MIN_FWDS    = 5        # só vale se tiver pelo menos N forwards na janela
 
+# =========================
+# TUNING EXTRA (NOVO)
+# =========================
+
+# Step cap dinâmico
+DYNAMIC_STEP_CAP_ENABLE = True
+STEP_CAP_LOW_005 = 0.12   # out_ratio < 0.03
+STEP_CAP_LOW_010 = 0.08   # 0.03 <= out_ratio < 0.05
+STEP_CAP_IDLE_DOWN = 0.12 # fwd_count==0 & out_ratio>0.60 (queda)
+STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
+
+# Floor por canal mais robusto
+REBAL_PERCHAN_MIN_VALUE_SAT = 200_000
+REBAL_FLOOR_SEED_CAP_FACTOR = 1.6
+
+# Outrate floor dinâmico
+OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
+OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 5
+OUTRATE_FLOOR_FACTOR_LOW          = 0.80
+
+# Discovery mode
+DISCOVERY_ENABLE   = True
+DISCOVERY_OUT_MIN  = 0.30
+DISCOVERY_FWDS_MAX = 0
+
+# Seed smoothing (EMA leve)
+SEED_EMA_ALPHA = 0.20
+
+# ========== LUCRO/DEMANDA ==========
+SURGE_ENABLE = True
+SURGE_LOW_OUT_THRESH = 0.08
+SURGE_K = 0.60
+SURGE_BUMP_MAX = 0.35
+
+TOP_REVENUE_SURGE_ENABLE = True
+TOP_OUTFEE_SHARE = 0.20
+TOP_REVENUE_SURGE_BUMP = 0.10
+
+NEG_MARGIN_SURGE_ENABLE = True
+NEG_MARGIN_SURGE_BUMP   = 0.08
+NEG_MARGIN_MIN_FWDS     = 5
+
+BOS_PUSH_MIN_ABS_PPM   = 3
+BOS_PUSH_MIN_REL_FRAC  = 0.01
+
+# ========== OFFLINE SKIP (NOVO) ==========
+OFFLINE_SKIP_ENABLE = True
+OFFLINE_STATUS_CACHE_KEY = "chan_status"  # onde persiste no CACHE_PATH
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -104,7 +153,6 @@ def load_json(path, default):
     return default
 
 def to_sqlite_str(dt):
-    """Converte datetime tz-aware para string ISO compatível com BETWEEN do SQLite."""
     if dt.tzinfo is not None:
         dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
     return dt.isoformat(sep=' ', timespec='seconds')
@@ -137,8 +185,17 @@ def apply_step_cap(current_ppm, target_ppm):
     if delta < -cap: return current_ppm - cap
     return target_ppm
 
+def apply_step_cap2(current_ppm, target_ppm, cap_frac=None, min_step_ppm=1):
+    if current_ppm <= 0:
+        return clamp_ppm(target_ppm)
+    capf = float(cap_frac if cap_frac is not None else STEP_CAP)
+    cap = max(int(abs(current_ppm) * capf), int(min_step_ppm))
+    delta = target_ppm - current_ppm
+    if delta > cap:  return current_ppm + cap
+    if delta < -cap: return current_ppm - cap
+    return target_ppm
+
 def _chunk_text(text, max_len=4000):
-    """Quebra em blocos <= max_len, preferindo quebras em '\n'."""
     chunks = []
     while text:
         if len(text) <= max_len:
@@ -158,7 +215,7 @@ def tg_send_big(text):
     for part in _chunk_text(text, 4000):
         try:
             requests.post(url, json={"chat_id": TELEGRAM_CHAT, "text": part}, timeout=20)
-            time.sleep(0.2)  # evita rate limit
+            time.sleep(0.2)
         except Exception:
             pass
 
@@ -166,19 +223,23 @@ def has_column(cur, table, column):
     cur.execute(f"PRAGMA table_info({table})")
     return any(r[1] == column for r in cur.fetchall())
 
+def fmt_duration(secs):
+    s = int(max(0, secs))
+    d = s // 86400; s %= 86400
+    h = s // 3600;  s %= 3600
+    m = s // 60
+    parts = []
+    if d: parts.append(f"{d}d")
+    if h: parts.append(f"{h}h")
+    if m and not d: parts.append(f"{m}m")
+    return " ".join(parts) if parts else "0m"
+
 # === utilitário p/ piso conforme REBAL_COST_MODE ===
 def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
-    """
-    Retorna o custo-base em ppm para formar o piso, conforme REBAL_COST_MODE.
-    - per_channel: usa custo do canal se houver; senão, global.
-    - global: sempre o custo global.
-    - blend: mistura lambda*global + (1-lambda)*canal; com fallbacks.
-    """
     mode = (REBAL_COST_MODE or "per_channel").lower()
     lam  = max(0.0, min(1.0, float(REBAL_BLEND_LAMBDA or 0.0)))
     ch = perchan_cost_map.get(cid) or 0.0
     gl = global_cost or 0.0
-
     if mode == "global":
         base = gl
     elif mode == "blend":
@@ -188,9 +249,8 @@ def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
             base = ch
         else:
             base = gl
-    else:  # per_channel (padrão)
+    else:  # per_channel
         base = ch if ch > 0 else gl
-
     return base or 0.0
 
 # ========== DB QUERIES ==========
@@ -199,7 +259,6 @@ SELECT chan_id_in, chan_id_out, amt_in_msat, amt_out_msat, fee, forward_date
 FROM gui_forwards
 WHERE forward_date BETWEEN ? AND ?
 """
-# inclui rebal_chan para piso por canal
 SQL_REBAL_PAYMENTS = """
 SELECT rebal_chan, value, fee, creation_date
 FROM gui_payments
@@ -214,26 +273,22 @@ def db_connect():
 # ========== LND SNAPSHOT ==========
 def listchannels_snapshot():
     """
-    Indexa o snapshot do lncli de três formas:
-      - by_scid_dec: usando 'scid' (decimal)  << MAIS CONFIÁVEL p/ cruzar com LNDg
-      - by_cid_dec:  se 'chan_id' vier numérico (algumas versões antigas)
-      - by_point:    sempre que houver 'channel_point'
+    Indexa snapshot do lncli de três formas + flag 'active' (online/offline).
     """
     data = json.loads(run(f"{LNCLI} listchannels"))
-    by_scid_dec = {}
-    by_cid_dec  = {}
-    by_point    = {}
+    by_scid_dec, by_cid_dec, by_point = {}, {}, {}
     for ch in data.get("channels", []):
-        scid = ch.get("scid")        # decimal em string
-        cid  = ch.get("chan_id")     # pode ser HEX em versões novas
+        scid  = ch.get("scid")
+        cid   = ch.get("chan_id")
         point = ch.get("channel_point")
-
+        active = bool(ch.get("active", False))
         info = {
             "capacity": int(ch.get("capacity", 0)),
             "local_balance": int(ch.get("local_balance", 0)),
             "remote_balance": int(ch.get("remote_balance", 0)),
             "remote_pubkey": ch.get("remote_pubkey"),
             "chan_point": point,
+            "active": active,
         }
         if scid is not None and str(scid).isdigit():
             by_scid_dec[str(scid)] = info
@@ -245,7 +300,6 @@ def listchannels_snapshot():
 
 # ========== AMBOSS ==========
 def _percentile(vals, q):
-    """Percentil linear (0..1)."""
     if not vals:
         return None
     vs = sorted(vals)
@@ -259,12 +313,10 @@ def _percentile(vals, q):
     return vs[lo] * (hi - pos) + vs[hi] * (pos - lo)
 
 def amboss_seed_series_7d(pubkey, cache):
-    """Busca série 7d de incoming_fee_rate_metrics/weighted_corrected_mean. Cache 3h."""
     key = f"incoming_series_7d:{pubkey}"
     now = int(time.time())
     if key in cache and now - cache[key]["ts"] < 3*3600:
         return cache[key]["vals"]
-
     from_date = (now_utc() - datetime.timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
     q = {
         "query": """
@@ -294,45 +346,35 @@ def amboss_seed_series_7d(pubkey, cache):
         return None
 
 def seed_with_guard(pubkey, cache, state, cid):
-    """
-    Retorna (seed_usado, raw_p65, p95, flags)
-    Aplica guardas: p95-cap, jump vs seed anterior e teto absoluto.
-    """
     vals = amboss_seed_series_7d(pubkey, cache)
     if not vals:
-        return 200.0, None, None, []  # fallback conservador
-
+        return 200.0, None, None, []
     raw_p65 = _percentile(vals, 0.65)
     p95     = _percentile(vals, 0.95)
     seed    = raw_p65
     flags   = []
-
     if SEED_GUARD_ENABLE:
         if SEED_GUARD_P95_CAP and p95 is not None and seed > p95:
             seed = p95
             flags.append("p95")
-
         prev_seed = (state.get(cid) or {}).get("last_seed", None)
         if prev_seed and prev_seed > 0:
             cap_prev = prev_seed * (1.0 + SEED_GUARD_MAX_JUMP)
             if seed > cap_prev:
                 seed = cap_prev
                 flags.append("prev+{:.0f}%".format(SEED_GUARD_MAX_JUMP*100))
-
         if SEED_GUARD_ABS_MAX_PPM and seed > SEED_GUARD_ABS_MAX_PPM:
             seed = float(SEED_GUARD_ABS_MAX_PPM)
             flags.append("abs")
-
     return float(seed), float(raw_p65), (float(p95) if p95 is not None else None), flags
 
 # ========== BOS ==========
 def bos_set_fee_ppm(to_pubkey, ppm_value):
-    # envia SEMPRE inteiro em PPM pro bos
     v = clamp_ppm(int(round(ppm_value)))
     cmd = f'{BOS} fees --to {to_pubkey} --set-fee-rate {v}'
     run(cmd)
 
-# ========== STATE (CB) ==========
+# ========== STATE ==========
 def get_state():
     return load_json(STATE_PATH, {})
 
@@ -362,7 +404,7 @@ def main(dry_run=False):
         channels_meta = {}
         open_cids = set()
         for (chan_id, chan_point, alias, local_fee_rate, remote_fee_rate, ar_max_cost, remote_pubkey, is_open) in meta_rows:
-            cid = str(chan_id)  # SCID DECIMAL
+            cid = str(chan_id)
             channels_meta[cid] = {
                 "chan_point": chan_point,
                 "alias": alias or "Unknown",
@@ -424,7 +466,6 @@ def main(dry_run=False):
             chan_pubkey[cid] = meta.get("remote_pubkey")
 
     incoming_msat_by_pub = defaultdict(int)
-
     for (cid_in, cid_out, amt_in_msat, amt_out_msat, fee_sat, fwd_date) in rows:
         if cid_out:
             k = str(cid_out)
@@ -440,8 +481,9 @@ def main(dry_run=False):
     total_incoming_msat = sum(incoming_msat_by_pub.values())
     peer_count = max(1, len(incoming_msat_by_pub))
     avg_share = 1.0 / peer_count if peer_count > 0 else 0.0
+    total_out_fee_sat = sum(out_fee_sat.values())
 
-    # ---- Custo de rebal (7d) GLOBAL e POR CANAL ----
+    # ---- Custo de rebal (7d) ----
     cur.execute(SQL_REBAL_PAYMENTS, (to_sqlite_str(start_dt), to_sqlite_str(end_dt)))
     pay_rows = cur.fetchall()
 
@@ -464,14 +506,20 @@ def main(dry_run=False):
         cid: ppm(perchan_fee_sat[cid], perchan_value_sat[cid]) for cid in perchan_value_sat.keys()
     }
 
+    rebal_cost_ppm_by_chan_use = {}
+    for cid_k in set(list(perchan_value_sat.keys()) + list(rebal_cost_ppm_by_chan.keys())):
+        if perchan_value_sat.get(cid_k, 0) >= REBAL_PERCHAN_MIN_VALUE_SAT:
+            rebal_cost_ppm_by_chan_use[cid_k] = rebal_cost_ppm_by_chan.get(cid_k, 0)
+
     report = []
     report.append(f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)")
 
-    # --- métricas p/ resumo ---
     changed_up = changed_down = kept = 0
     low_out_count = 0
-
     unmatched = 0
+    offline_skips = 0
+
+    chan_status_cache = cache.get(OFFLINE_STATUS_CACHE_KEY, {})
 
     for cid in sorted(open_cids):
         meta = channels_meta.get(cid, {})
@@ -494,6 +542,50 @@ def main(dry_run=False):
             report.append(f"⏭️  {alias} ({cid}) skip (exclusion)")
             continue
 
+        # --- OFFLINE SKIP: detecta status e persiste em cache ---
+        now_ts = int(time.time())
+        active_flag = (live_info or {}).get("active", None)
+        # Atualiza cache de status
+        prev = chan_status_cache.get(cid, {})
+        prev_active = prev.get("active", None)
+        status_entry = {
+            "alias": alias,
+            "active": 1 if active_flag else 0 if active_flag is not None else None,
+            "last_seen": now_ts,
+            "last_online": prev.get("last_online"),
+            "last_offline": prev.get("last_offline"),
+        }
+        if active_flag is True:
+            status_entry["last_online"] = now_ts
+        elif active_flag is False:
+            status_entry["last_offline"] = status_entry.get("last_offline", now_ts)
+        chan_status_cache[cid] = status_entry
+        cache[OFFLINE_STATUS_CACHE_KEY] = chan_status_cache
+
+        # monta tag de status
+        status_tags = []
+        if active_flag is True:
+            status_tags.append("🟢on")
+            if prev_active == 0:
+                status_tags.append("🟢back")
+        elif active_flag is False:
+            status_tags.append("🔴off")
+
+        # Se sabemos que está offline, faz skip cedo
+        if OFFLINE_SKIP_ENABLE and active_flag is False:
+            offline_skips += 1
+            since_off = fmt_duration(now_ts - (status_entry.get("last_offline") or now_ts))
+            last_on = status_entry.get("last_online")
+            last_on_ago = fmt_duration(now_ts - last_on) if last_on else "n/a"
+            report.append(f"⏭️🔌 {alias} ({cid}) skip: canal offline ({since_off}) | last_on≈{last_on_ago} | local {local_ppm} ppm")
+            # mantém streak/seed no estado sem alterar taxa
+            if not dry_run:
+                st = state.get(cid, {}).copy()
+                st["last_seed"] = float(st.get("last_seed", 0.0))  # no-op, só para manter chave
+                state[cid] = st
+            continue
+
+        # prossegue normal (online ou status desconhecido)
         cap   = int((live_info or {}).get("capacity", 0))
         local = int((live_info or {}).get("local_balance", 0))
         out_ratio = (local / cap) if cap > 0 else 0.5
@@ -506,7 +598,7 @@ def main(dry_run=False):
         # Seed (Amboss) com guard
         seed_used, seed_raw, seed_p95, seed_flags = seed_with_guard(pubkey, cache, state, cid)
         if seed_used is None:
-            seed_used = 200.0  # fallback
+            seed_used = 200.0
 
         # Ponderação pelo volume de ENTRADA do peer
         if total_incoming_msat > 0 and VOLUME_WEIGHT_ALPHA > 0 and pubkey:
@@ -514,52 +606,48 @@ def main(dry_run=False):
             factor = 1.0 + VOLUME_WEIGHT_ALPHA * (share - avg_share)
             seed_used *= max(0.7, min(1.3, factor))
 
-        # tags do guard do seed (com emoji)
+        # EMA leve no seed
+        prev_seed_for_ema = (state.get(cid, {}) or {}).get("last_seed")
+        if SEED_EMA_ALPHA and SEED_EMA_ALPHA > 0 and prev_seed_for_ema and prev_seed_for_ema > 0:
+            seed_used = float(prev_seed_for_ema)*(1.0 - SEED_EMA_ALPHA) + float(seed_used)*SEED_EMA_ALPHA
+
+        # tags do guard do seed
         seed_tags = []
         for fl in (seed_flags or []):
             if fl == "p95": seed_tags.append("🧬seedcap:p95")
-            elif fl.startswith("prev+"): seed_tags.append("🧬seedcap:" + fl)  # ex: prev+50%
+            elif fl.startswith("prev+"): seed_tags.append("🧬seedcap:" + fl)
             elif fl == "abs": seed_tags.append("🧬seedcap:abs")
 
-        # persistir last_seed cedo (em memória; gravação em disco só sem --dry-run)
+        # persistir last_seed cedo
         if not dry_run:
             st_tmp = state.get(cid, {}).copy()
             st_tmp["last_seed"] = float(seed_used)
             state[cid] = st_tmp
 
-        # --- Alvo BASE: seed + colchão (sem somar rebal) ---
+        # --- Alvo BASE ---
         target_base = seed_used + COLCHAO_PPM
         target = target_base
 
-        # --- Escalada por persistência de baixo outbound (ANTES do ajuste de liquidez) ---
+        # --- Escalada por persistência de baixo outbound ---
         streak = state.get(cid, {}).get("low_streak", 0)
         if PERSISTENT_LOW_ENABLE:
             if out_ratio < PERSISTENT_LOW_THRESH:
                 streak += 1
             else:
                 streak = 0
-
             if streak >= PERSISTENT_LOW_STREAK_MIN:
-                # bump acumulado limitado
                 bump_acc = (streak - PERSISTENT_LOW_STREAK_MIN + 1) * PERSISTENT_LOW_BUMP
                 bump_acc = min(PERSISTENT_LOW_MAX, max(0.0, bump_acc))
                 bump_mult = 1.0 + bump_acc
-
-                bump_mode = "seed"
                 if PERSISTENT_LOW_OVER_CURRENT_ENABLE and target <= local_ppm:
-                    # escalada "over current": garante sair de local_ppm pra cima
-                    target = max(
-                        target,
-                        int(math.ceil(local_ppm * bump_mult)),
-                        local_ppm + int(PERSISTENT_LOW_MIN_STEP_PPM or 0)
-                    )
+                    target = max(target, int(math.ceil(local_ppm * bump_mult)), local_ppm + int(PERSISTENT_LOW_MIN_STEP_PPM or 0))
                     bump_mode = "over_current"
                 else:
                     target = int(math.ceil(target * bump_mult))
-
+                    bump_mode = "seed"
                 report.append(f"📈 Persistência: {alias} ({cid}) streak {streak} ⇒ bump {bump_acc*100:.0f}% ({bump_mode})")
 
-        # --- Ajuste por liquidez ---
+        # --- Liquidez ---
         if out_ratio < LOW_OUTBOUND_THRESH:
             target *= (1.0 + LOW_OUTBOUND_BUMP)
         elif out_ratio > HIGH_OUTBOUND_THRESH:
@@ -567,35 +655,56 @@ def main(dry_run=False):
             if fwd_count == 0 and out_ratio > 0.60:
                 target *= (1.0 - IDLE_EXTRA_CUT)
 
+        # --- Surge pricing ---
+        surge_tag = ""
+        if SURGE_ENABLE and out_ratio < SURGE_LOW_OUT_THRESH:
+            lack = max(0.0, (SURGE_LOW_OUT_THRESH - out_ratio) / SURGE_LOW_OUT_THRESH)
+            surge_bump = min(SURGE_BUMP_MAX, SURGE_K * lack)
+            if surge_bump > 0:
+                target = int(math.ceil(target * (1.0 + surge_bump)))
+                surge_tag = f"⚡surge+{int(surge_bump*100)}%"
+
         target = clamp_ppm(target)
 
-        # ===== Guardas para cenário "low outbound" (depois da liquidez) =====
+        # Guard low: não reduzir quando drenado
         pl_tags = []
-        # 1) No-down while low: não deixar alvo < taxa atual quando está baixo
         if out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
             target = local_ppm
             pl_tags.append("🙅‍♂️no-down-low")
-        # ====================================================================
 
-        # ---- STEP CAP antes do piso (para diagnosticar) ----
-        raw_step_ppm = target if local_ppm == 0 else apply_step_cap(local_ppm, target)
+        # Step cap dinâmico
+        cap_frac = STEP_CAP
+        if DYNAMIC_STEP_CAP_ENABLE:
+            if out_ratio < 0.03:
+                cap_frac = max(cap_frac, STEP_CAP_LOW_005)
+            elif out_ratio < 0.05:
+                cap_frac = max(cap_frac, STEP_CAP_LOW_010)
+            if fwd_count == 0 and out_ratio > 0.60:
+                cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
 
+        # Discovery
+        discovery_hit = False
+        if DISCOVERY_ENABLE and fwd_count <= DISCOVERY_FWDS_MAX and out_ratio > DISCOVERY_OUT_MIN:
+            discovery_hit = True
+            cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
+
+        raw_step_ppm = target if local_ppm == 0 else apply_step_cap2(local_ppm, target, cap_frac, STEP_MIN_STEP_PPM)
+
+        # Circuit breaker
         now_ts = int(time.time())
-        # Circuit breaker atua sobre raw_step_ppm
         state_all = state.get(cid, {})
         last_ppm  = state_all.get("last_ppm", local_ppm)
         last_dir  = state_all.get("last_dir", "flat")
         last_ts   = state_all.get("last_ts", 0)
         baseline  = state_all.get("baseline_fwd7d", None)
-
         if last_dir == "up" and (now_ts - last_ts) <= CB_GRACE_DAYS*24*3600 and baseline:
             if baseline > 0 and fwd_count < baseline * CB_DROP_RATIO:
                 raw_step_ppm = clamp_ppm(int(raw_step_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
-        # Piso de rebal conforme REBAL_COST_MODE
+        # Piso rebal
         if REBAL_FLOOR_ENABLE:
-            base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan, rebal_cost_ppm_global)
+            base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
             if base_cost > 0:
                 floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
             else:
@@ -603,25 +712,58 @@ def main(dry_run=False):
         else:
             floor_ppm = MIN_PPM
 
-        # Piso adicional pelo out_ppm7d (se houver amostragem suficiente)
-        if OUTRATE_FLOOR_ENABLE and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
-            outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * OUTRATE_FLOOR_FACTOR))
+        # Outrate floor dinâmico
+        outrate_floor_active = OUTRATE_FLOOR_ENABLE
+        outrate_factor = OUTRATE_FLOOR_FACTOR
+        if OUTRATE_FLOOR_DYNAMIC_ENABLE:
+            if fwd_count < OUTRATE_FLOOR_DISABLE_BELOW_FWDS:
+                outrate_floor_active = False
+            elif fwd_count < 10:
+                outrate_factor = OUTRATE_FLOOR_FACTOR_LOW
+        if discovery_hit:
+            outrate_floor_active = False
+        out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
+        if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
+            outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
             floor_ppm = max(floor_ppm, outrate_floor)
+
+        # Cap do floor pelo seed
+        floor_ppm = min(floor_ppm, clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR))))
+
+        # Métricas lucro
+        base_cost_for_margin = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
+        margin_ppm_7d = int(round(out_ppm_7d - (base_cost_for_margin * (1.0 + REBAL_FLOOR_MARGIN)))) if base_cost_for_margin else int(round(out_ppm_7d))
+        rev_share = (out_fee_sat.get(cid, 0) / total_out_fee_sat) if total_out_fee_sat > 0 else 0.0
+
+        # Top revenue surge
+        if TOP_REVENUE_SURGE_ENABLE and rev_share >= TOP_OUTFEE_SHARE and out_ratio < 0.30:
+            target_boost = int(math.ceil(target * TOP_REVENUE_SURGE_BUMP))
+            raw_step_ppm = clamp_ppm(max(raw_step_ppm, target + target_boost))
+            surge_tag = (surge_tag + " " if surge_tag else "") + f"👑top+{int(TOP_REVENUE_SURGE_BUMP*100)}%"
+
+        # Margem negativa
+        if NEG_MARGIN_SURGE_ENABLE and margin_ppm_7d < 0 and fwd_count >= NEG_MARGIN_MIN_FWDS:
+            bump = int(math.ceil(target * NEG_MARGIN_SURGE_BUMP))
+            raw_step_ppm = clamp_ppm(max(raw_step_ppm, target + bump))
+            surge_tag = (surge_tag + " " if surge_tag else "") + f"💹negm+{int(NEG_MARGIN_SURGE_BUMP*100)}%"
 
         final_ppm = max(raw_step_ppm, floor_ppm)
 
-        # Diagnóstico: stepcap / floor-lock
+        # Diagnóstico
         diag_tags = []
         if raw_step_ppm != target:
-            # moveu na direção do target mas limitado
             dir_same = (target > local_ppm and raw_step_ppm > local_ppm) or (target < local_ppm and raw_step_ppm < local_ppm)
             if dir_same:
                 diag_tags.append("⛔stepcap")
         if final_ppm < target and final_ppm == floor_ppm:
             diag_tags.append("🧱floor-lock")
-        # (opcional) travou exatamente no atual por arredondamento/cap
         if final_ppm == local_ppm and target != local_ppm and floor_ppm <= local_ppm:
             diag_tags.append("⛔stepcap-lock")
+        if discovery_hit:
+            diag_tags.append("🧪discovery")
+        if surge_tag:
+            diag_tags.append(surge_tag)
+        diag_tags += status_tags  # adiciona status 🟢on/🟢back
 
         all_tags = pl_tags + seed_tags + diag_tags
         new_ppm = final_ppm
@@ -630,13 +772,19 @@ def main(dry_run=False):
         seed_note = f"{int(seed_used)}" + (" (cap)" if seed_flags else "")
         dir_for_emoji = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
         emo = "🔺" if dir_for_emoji == "up" else ("🔻" if dir_for_emoji == "down" else "⏸️")
-        tag_note = (" " + " ".join(all_tags)) if all_tags else ""
 
-        if new_ppm != local_ppm:
+        push_forced_by_floor = (floor_ppm > local_ppm and new_ppm > local_ppm)
+        will_push = True
+        if new_ppm != local_ppm and not push_forced_by_floor:
+            delta_ppm = abs(new_ppm - local_ppm)
+            rel = delta_ppm / max(1, local_ppm)
+            if delta_ppm < BOS_PUSH_MIN_ABS_PPM and rel < BOS_PUSH_MIN_REL_FRAC:
+                will_push = False
+
+        if new_ppm != local_ppm and will_push:
             delta = new_ppm - local_ppm
             pct = (abs(delta) / local_ppm * 100.0) if local_ppm > 0 else 0.0
             dstr = f"{'+' if delta>0 else ''}{delta} ({pct:.1f}%)"
-
             if dry_run:
                 action = f"DRY set {local_ppm}→{new_ppm} ppm {dstr}"
                 new_dir = dir_for_emoji
@@ -647,11 +795,19 @@ def main(dry_run=False):
                         action = f"set {local_ppm}→{new_ppm} ppm {dstr}"
                         new_dir = dir_for_emoji
                         st = state.get(cid, {}).copy()
+                        old_base = st.get("baseline_fwd7d", 0)
+                        if fwd_count > 0:
+                            if old_base and old_base > 0:
+                                new_base = int(round(0.7*old_base + 0.3*fwd_count))
+                            else:
+                                new_base = fwd_count
+                        else:
+                            new_base = old_base
                         st.update({
                             "last_ppm": new_ppm,
                             "last_dir": new_dir,
-                            "last_ts":  now_ts,
-                            "baseline_fwd7d": fwd_count if fwd_count > 0 else st.get("baseline_fwd7d", 0),
+                            "last_ts":  int(time.time()),
+                            "baseline_fwd7d": new_base,
                             "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
                             "last_seed": float(seed_used),
                         })
@@ -664,7 +820,7 @@ def main(dry_run=False):
                     new_dir = "flat"
 
             report.append(
-                f"✅{emo} {alias}: {action} | alvo {target}{(' | ' + ' '.join(all_tags)) if all_tags else ''} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
+                f"✅{emo} {alias}: {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
             )
             if new_ppm > local_ppm: changed_up += 1
             else: changed_down += 1
@@ -675,14 +831,14 @@ def main(dry_run=False):
                 st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
                 st["last_seed"] = float(seed_used)
                 state[cid] = st
-
             kept += 1
+            hold_tag = "" if will_push else " 🧘hold-small"
             report.append(
-                f"🫤⏸️ {alias}: mantém {local_ppm} ppm | alvo {target}{tag_note} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm}"
+                f"🫤⏸️ {alias}: mantém {local_ppm} ppm{hold_tag} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
             )
 
     # resumo na 2ª linha do relatório
-    report.insert(1, f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count}")
+    report.insert(1, f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips}")
 
     if unmatched > 0:
         report.append(f"ℹ️  {unmatched} canal(is) sem snapshot por scid/chan_point (out_ratio=0.50 por fallback). Cheque versão do lncli e permissões.")
@@ -693,11 +849,11 @@ def main(dry_run=False):
 
     msg = "\n".join(report)
     print(msg)
-    if not dry_run:            # não envia quando for --dry-run
-        tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
+    if not dry_run:
+        tg_send_big(msg)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, ponderação por entrada, liquidez, piso, persistência over-current e circuit-breaker)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, EMA, ponderação por entrada, liquidez, surge, piso robusto, persistência over-current, discovery, circuit-breaker, gate anti-microupdate e skip offline)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
