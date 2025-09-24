@@ -143,6 +143,16 @@ OFFLINE_STATUS_CACHE_KEY = "chan_status"  # onde persiste no CACHE_PATH
 # Os boosts são aplicados ao "target" e SÓ DEPOIS passa no step cap.
 SURGE_RESPECT_STEPCAP = True
 
+# ========== HISTERÉSE (COOLDOWN) ==========
+APPLY_COOLDOWN_ENABLE = True
+COOLDOWN_HOURS_UP   = 4    # tempo mínimo entre SUBIDAS
+COOLDOWN_HOURS_DOWN = 8   # tempo mínimo entre QUEDAS (mais cautela)
+COOLDOWN_FWDS_MIN   = 3    # exige pelo menos X forwards desde a última mudança
+
+# ========== SHARDING (processar 1/N dos canais por rodada) ==========
+SHARDING_ENABLE = True
+SHARD_MOD = 3  # 3 shards => cada canal muda a cada ~3 horas
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -295,7 +305,7 @@ def listchannels_snapshot():
     by_point    = {}
     for ch in data.get("channels", []):
         scid = ch.get("scid")        # decimal em string
-        cid  = ch.get("chan_id")     # pode ser HEX em versões novas
+        cid  = ch.get("chan_id")     # pode ser DECIMAL em string
         point = ch.get("channel_point")
         active = bool(ch.get("active", False))
 
@@ -556,15 +566,24 @@ def main(dry_run=False):
         if perchan_value_sat.get(cid_k, 0) >= REBAL_PERCHAN_MIN_VALUE_SAT:
             rebal_cost_ppm_by_chan_use[cid_k] = rebal_cost_ppm_by_chan.get(cid_k, 0)
 
+    # ==== SHARDING SLOT ====
+    now_ts = int(time.time())
+    shard_slot = None
+    if SHARDING_ENABLE:
+        shard_slot = (now_ts // 3600) % SHARD_MOD
+
     report = []
-    report.append(f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)")
+    hdr = f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)"
+    if SHARDING_ENABLE:
+        hdr += f" | shard {shard_slot+1}/{SHARD_MOD}"
+    report.append(hdr)
 
     # --- métricas p/ resumo ---
     changed_up = changed_down = kept = 0
     low_out_count = 0
-
     unmatched = 0
     offline_skips = 0
+    shard_skips = 0
 
     chan_status_cache = cache.get(OFFLINE_STATUS_CACHE_KEY, {})
 
@@ -588,6 +607,19 @@ def main(dry_run=False):
         if pubkey in EXCLUSION_LIST:
             report.append(f"⏭️  {alias} ({cid}) skip (exclusion)")
             continue
+
+        # ---- SHARDING: pular canais não pertencentes ao slot atual ----
+        if SHARDING_ENABLE:
+            try:
+                cid_int = int(cid)
+            except Exception:
+                # fallback: usar os últimos 3 dígitos
+                digits = ''.join([c for c in cid if c.isdigit()])
+                cid_int = int(digits[-6:] or "0")
+            if (cid_int % SHARD_MOD) != shard_slot:
+                shard_skips += 1
+                report.append(f"⏭️🧩 {alias} ({cid}) skip (shard {shard_slot+1}/{SHARD_MOD})")
+                continue
 
         # --- OFFLINE SKIP: detecta status e persiste em cache ---
         now_ts = int(time.time())
@@ -625,7 +657,6 @@ def main(dry_run=False):
             last_on = status_entry.get("last_online")
             last_on_ago = fmt_duration(now_ts - last_on) if last_on else "n/a"
             report.append(f"⏭️🔌 {alias} ({cid}) skip: canal offline ({since_off}) | last_on≈{last_on_ago} | local {local_ppm} ppm")
-            # mantém streak/seed no estado sem alterar taxa
             if not dry_run:
                 st = state.get(cid, {}).copy()
                 st["last_seed"] = float(st.get("last_seed", 0.0))  # no-op, só para manter chave
@@ -714,7 +745,7 @@ def main(dry_run=False):
             if fwd_count == 0 and out_ratio > 0.60:
                 target *= (1.0 - IDLE_EXTRA_CUT)
 
-        # --- BOOSTS que AGORA respeitam o step cap (tudo vira "boosted_target") ---
+        # --- BOOSTS que RESPEITAM o step cap ---
         surge_tag = ""
         top_tag = ""
         negm_tag = ""
@@ -746,7 +777,7 @@ def main(dry_run=False):
             target = local_ppm
             pl_tags.append("🙅‍♂️no-down-low")
 
-        # ---- STEP CAP dinâmico (agora sobre o alvo já "turbinado") ----
+        # ---- STEP CAP dinâmico (sobre o alvo já "turbinado") ----
         cap_frac = STEP_CAP
         if DYNAMIC_STEP_CAP_ENABLE:
             if out_ratio < 0.03:
@@ -756,21 +787,13 @@ def main(dry_run=False):
             if fwd_count == 0 and out_ratio > 0.60:
                 cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
 
-        # Discovery mode: sem forwards e liquidez sobrando => acelera queda e ignora outrate floor (mais abaixo)
+        # Discovery mode
         discovery_hit = False
         if DISCOVERY_ENABLE and fwd_count <= DISCOVERY_FWDS_MAX and out_ratio > DISCOVERY_OUT_MIN:
             discovery_hit = True
             cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
 
         raw_step_ppm = target if local_ppm == 0 else apply_step_cap2(local_ppm, target, cap_frac, STEP_MIN_STEP_PPM)
-
-        # (compat: se alguém desativar SURGE_RESPECT_STEPCAP no futuro)
-        if not SURGE_RESPECT_STEPCAP:
-            # NUNCA recomendado: permitir ultrapassar stepcap após boosts
-            if top_tag:
-                raw_step_ppm = clamp_ppm(max(raw_step_ppm, int(math.ceil(target * (1.0 + TOP_REVENUE_SURGE_BUMP)))))
-            if negm_tag:
-                raw_step_ppm = clamp_ppm(max(raw_step_ppm, int(math.ceil(target * (1.0 + NEG_MARGIN_SURGE_BUMP)))))
 
         # Circuit breaker atua sobre raw_step_ppm
         now_ts = int(time.time())
@@ -849,6 +872,20 @@ def main(dry_run=False):
             rel = delta_ppm / max(1, local_ppm)
             if delta_ppm < BOS_PUSH_MIN_ABS_PPM and rel < BOS_PUSH_MIN_REL_FRAC:
                 will_push = False
+                all_tags.append("🧘hold-small")
+
+        # === COOLDOWN / HISTERÉSE ===
+        st_prev  = state.get(cid, {})
+        last_ts  = st_prev.get("last_ts", 0)
+        hours_since = (int(time.time()) - last_ts) / 3600 if last_ts else 999
+        fwds_at_change = st_prev.get("fwds_at_change", 0)
+        fwds_since = max(0, fwd_count - fwds_at_change)
+
+        if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
+            need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
+            if hours_since < need and fwds_since < COOLDOWN_FWDS_MIN:
+                will_push = False
+                all_tags.append(f"⏳cooldown{int(need)}h")
 
         if new_ppm != local_ppm and will_push:
             delta = new_ppm - local_ppm
@@ -879,10 +916,11 @@ def main(dry_run=False):
                         st.update({
                             "last_ppm": new_ppm,
                             "last_dir": new_dir,
-                            "last_ts":  now_ts,
+                            "last_ts":  int(time.time()),
                             "baseline_fwd7d": new_base,
                             "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
                             "last_seed": float(seed_used),
+                            "fwds_at_change": fwd_count,   # <== registra amostra p/ cooldown
                         })
                         state[cid] = st
                     else:
@@ -899,7 +937,7 @@ def main(dry_run=False):
             else: changed_down += 1
 
         else:
-            # não aplicou (ou micro-update segurado): mantém
+            # não aplicou (ou micro-update/cooldown segurou): mantém
             if not dry_run:
                 st = state.get(cid, {}).copy()
                 st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
@@ -907,13 +945,15 @@ def main(dry_run=False):
                 state[cid] = st
 
             kept += 1
-            hold_tag = "" if will_push else " 🧘hold-small"
             report.append(
-                f"🫤⏸️ {alias}: mantém {local_ppm} ppm{hold_tag} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                f"🫤⏸️ {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
             )
 
     # resumo na 2ª linha do relatório
-    report.insert(1, f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips}")
+    summary = f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips}"
+    if SHARDING_ENABLE:
+        summary += f" | shard_skips {shard_skips}"
+    report.insert(1, summary)
 
     if unmatched > 0:
         report.append(f"ℹ️  {unmatched} canal(is) sem snapshot por scid/chan_point (out_ratio=0.50 por fallback). Cheque versão do lncli e permissões.")
@@ -928,7 +968,7 @@ def main(dry_run=False):
         tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, EMA, ponderação por entrada, liquidez, boosts que respeitam step cap, piso robusto, persistência over-current, discovery, circuit-breaker, gate anti-microupdate e skip offline)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, EMA, ponderação por entrada, liquidez, boosts respeitando step cap, piso robusto, persistência over-current, discovery, circuit-breaker, SHARDING e COOLDOWN/histerese para execuções de 1h)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
