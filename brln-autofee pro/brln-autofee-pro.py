@@ -83,7 +83,7 @@ SEED_GUARD_ABS_MAX_PPM = 2000   # teto absoluto opcional (0/None para desativar)
 
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True
-OUTRATE_FLOOR_FACTOR      = 0.95
+OUTRATE_FLOOR_FACTOR      = 1
 OUTRATE_FLOOR_MIN_FWDS    = 5
 
 # =========================
@@ -92,7 +92,7 @@ OUTRATE_FLOOR_MIN_FWDS    = 5
 
 # Step cap dinâmico
 DYNAMIC_STEP_CAP_ENABLE = True
-STEP_CAP_LOW_005 = 0.10   # out_ratio < 0.03  (mais conservador que 0.12)
+STEP_CAP_LOW_005 = 0.10   # out_ratio < 0.03
 STEP_CAP_LOW_010 = 0.07   # 0.03 <= out_ratio < 0.05
 STEP_CAP_IDLE_DOWN = 0.10 # fwd_count==0 & out_ratio>0.60 (queda)
 STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
@@ -104,11 +104,11 @@ REBAL_FLOOR_SEED_CAP_FACTOR = 1.6      # teto do floor relativo ao seed
 # Outrate floor dinâmico
 OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
 OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 5     # desliga se fwd_count < 5
-OUTRATE_FLOOR_FACTOR_LOW          = 0.80  # usa 0.80 se 5 <= fwd < 10
+OUTRATE_FLOOR_FACTOR_LOW          = 0.90  # usa 0.90 se 5 <= fwd < 10
 
 # Discovery mode: sem forwards e liquidez sobrando -> queda mais rápida e sem outrate floor
 DISCOVERY_ENABLE   = True
-DISCOVERY_OUT_MIN  = 0.30
+DISCOVERY_OUT_MIN  = 0.30  # >30% outbound = sobra
 DISCOVERY_FWDS_MAX = 0
 
 # Seed smoothing (EMA leve)
@@ -118,40 +118,52 @@ SEED_EMA_ALPHA = 0.20  # 0 desliga
 # 1) Surge pricing quando muito drenado
 SURGE_ENABLE = True
 SURGE_LOW_OUT_THRESH = 0.08
-SURGE_K = 0.50                # ↓ de 0.60
-SURGE_BUMP_MAX = 0.30         # ↓ de 0.35/0.45
+SURGE_K = 0.50
+SURGE_BUMP_MAX = 0.20
 
 # 2) Bump em peers TOP de receita
 TOP_REVENUE_SURGE_ENABLE = True
-TOP_OUTFEE_SHARE = 0.30       # ↑ de 0.20 (mais seletivo)
-TOP_REVENUE_SURGE_BUMP = 0.10 # mantém
+TOP_OUTFEE_SHARE = 0.30
+TOP_REVENUE_SURGE_BUMP = 0.10
 
 # 3) Margem 7d negativa
 NEG_MARGIN_SURGE_ENABLE = True
-NEG_MARGIN_SURGE_BUMP   = 0.08  # ↓ para conservador
+NEG_MARGIN_SURGE_BUMP   = 0.08
 NEG_MARGIN_MIN_FWDS     = 5
 
-# 4) Evitar “micro-updates” no BOS
-BOS_PUSH_MIN_ABS_PPM   = 3
-BOS_PUSH_MIN_REL_FRAC  = 0.01
+# 4) Evitar “micro-updates” no BOS (MAIS DURO p/ 1h)
+BOS_PUSH_MIN_ABS_PPM   = 10     # ↑ (era 3)
+BOS_PUSH_MIN_REL_FRAC  = 0.03   # ↑ (era 0.01)
 
 # ========== OFFLINE SKIP ==========
 OFFLINE_SKIP_ENABLE = True
-OFFLINE_STATUS_CACHE_KEY = "chan_status"  # onde persiste no CACHE_PATH
+OFFLINE_STATUS_CACHE_KEY = "chan_status"
 
 # ========== SURGE RESPEITA STEPCAP ==========
-# Os boosts são aplicados ao "target" e SÓ DEPOIS passa no step cap.
 SURGE_RESPECT_STEPCAP = True
 
 # ========== HISTERÉSE (COOLDOWN) ==========
 APPLY_COOLDOWN_ENABLE = True
 COOLDOWN_HOURS_UP   = 4    # tempo mínimo entre SUBIDAS
-COOLDOWN_HOURS_DOWN = 8   # tempo mínimo entre QUEDAS (mais cautela)
+COOLDOWN_HOURS_DOWN = 8    # tempo mínimo entre QUEDAS
 COOLDOWN_FWDS_MIN   = 3    # exige pelo menos X forwards desde a última mudança
 
-# ========== SHARDING (processar 1/N dos canais por rodada) ==========
-SHARDING_ENABLE = True
+# ========== SHARDING ==========
+SHARDING_ENABLE = False
 SHARD_MOD = 3  # 3 shards => cada canal muda a cada ~3 horas
+
+# ========== NEW INBOUND NORMALIZE ==========
+NEW_INBOUND_NORMALIZE_ENABLE   = True
+NEW_INBOUND_GRACE_HOURS        = 48     # janela para "amaciar" canais novos do peer
+NEW_INBOUND_OUT_MAX            = 0.05   # outbound ~0 (inbound puro)
+NEW_INBOUND_REQUIRE_NO_FWDS    = True   # só ativa sem forwards
+NEW_INBOUND_MIN_DIFF_FRAC      = 0.25   # exige taxa atual ≥ seed*(1+25%)
+NEW_INBOUND_MIN_DIFF_PPM       = 50     # e pelo menos +50ppm acima do seed
+NEW_INBOUND_DOWN_STEPCAP_FRAC  = 0.15   # step cap maior só para reduzir
+NEW_INBOUND_TAG                = "🌱new-inbound"
+
+# ========== DEBUG ==========
+DEBUG_TAGS = True  # mostra seedcap:none e t/r/f no log
 
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
@@ -297,7 +309,7 @@ def db_connect():
 # ========== LND SNAPSHOT ==========
 def listchannels_snapshot():
     """
-    Indexa o snapshot do lncli de três formas + flag 'active' (online/offline).
+    Indexa o snapshot do lncli de três formas + flags 'active' e 'initiator'.
     """
     data = json.loads(run(f"{LNCLI} listchannels"))
     by_scid_dec = {}
@@ -305,9 +317,13 @@ def listchannels_snapshot():
     by_point    = {}
     for ch in data.get("channels", []):
         scid = ch.get("scid")        # decimal em string
-        cid  = ch.get("chan_id")     # pode ser DECIMAL em string
+        cid  = ch.get("chan_id")     # decimal em string (em versões novas do LND)
         point = ch.get("channel_point")
         active = bool(ch.get("active", False))
+        # Versões do LND usam 'initiator' (bool se fomos nós que iniciamos)
+        initiator = ch.get("initiator")
+        if initiator is None:
+            initiator = ch.get("initiated")  # fallback raro
 
         info = {
             "capacity": int(ch.get("capacity", 0)),
@@ -316,6 +332,7 @@ def listchannels_snapshot():
             "remote_pubkey": ch.get("remote_pubkey"),
             "chan_point": point,
             "active": active,
+            "initiator": bool(initiator) if initiator is not None else None,
         }
         if scid is not None and str(scid).isdigit():
             by_scid_dec[str(scid)] = info
@@ -584,6 +601,7 @@ def main(dry_run=False):
     unmatched = 0
     offline_skips = 0
     shard_skips = 0
+    excl_dry_up = excl_dry_down = excl_dry_kept = 0
 
     chan_status_cache = cache.get(OFFLINE_STATUS_CACHE_KEY, {})
 
@@ -604,16 +622,15 @@ def main(dry_run=False):
         pubkey = (live_info or {}).get("remote_pubkey") or meta.get("remote_pubkey")
         if not pubkey:
             unmatched += 1
-        if pubkey in EXCLUSION_LIST:
-            report.append(f"⏭️  {alias} ({cid}) skip (exclusion)")
-            continue
+
+        # ==== EXCLUSION: vira DRY-RUN especial ====
+        is_excluded = (pubkey in EXCLUSION_LIST) if pubkey else False
 
         # ---- SHARDING: pular canais não pertencentes ao slot atual ----
         if SHARDING_ENABLE:
             try:
                 cid_int = int(cid)
             except Exception:
-                # fallback: usar os últimos 3 dígitos
                 digits = ''.join([c for c in cid if c.isdigit()])
                 cid_int = int(digits[-6:] or "0")
             if (cid_int % SHARD_MOD) != shard_slot:
@@ -624,7 +641,6 @@ def main(dry_run=False):
         # --- OFFLINE SKIP: detecta status e persiste em cache ---
         now_ts = int(time.time())
         active_flag = (live_info or {}).get("active", None)
-        # Atualiza cache de status
         prev = chan_status_cache.get(cid, {})
         prev_active = prev.get("active", None)
         status_entry = {
@@ -656,19 +672,25 @@ def main(dry_run=False):
             since_off = fmt_duration(now_ts - (status_entry.get("last_offline") or now_ts))
             last_on = status_entry.get("last_online")
             last_on_ago = fmt_duration(now_ts - last_on) if last_on else "n/a"
-            report.append(f"⏭️🔌 {alias} ({cid}) skip: canal offline ({since_off}) | last_on≈{last_on_ago} | local {local_ppm} ppm")
-            if not dry_run:
+            extra = " 🚷excl-dry" if is_excluded else ""
+            report.append(f"⏭️🔌 {alias} ({cid}) skip: canal offline ({since_off}) | last_on≈{last_on_ago} | local {local_ppm} ppm{extra}")
+            # não persiste nada em excl-dry
+            if (not dry_run) and (not is_excluded):
                 st = state.get(cid, {}).copy()
-                st["last_seed"] = float(st.get("last_seed", 0.0))  # no-op, só para manter chave
+                st["last_seed"] = float(st.get("last_seed", 0.0))
                 state[cid] = st
             continue
 
         # prossegue normal (online ou status desconhecido)
         cap   = int((live_info or {}).get("capacity", 0))
         local = int((live_info or {}).get("local_balance", 0))
+        remote= int((live_info or {}).get("remote_balance", 0))
         out_ratio = (local / cap) if cap > 0 else 0.5
         if out_ratio < PERSISTENT_LOW_THRESH:
             low_out_count += 1
+
+        # detecção de initiator (se o peer abriu, initiator=False)
+        initiator = (live_info or {}).get("initiator", None)
 
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
@@ -695,10 +717,14 @@ def main(dry_run=False):
             if fl == "p95": seed_tags.append("🧬seedcap:p95")
             elif fl.startswith("prev+"): seed_tags.append("🧬seedcap:" + fl)  # ex: prev+50%
             elif fl == "abs": seed_tags.append("🧬seedcap:abs")
+        # debug: seed sem cap
+        if not seed_flags and DEBUG_TAGS:
+            seed_tags.append("🧬seedcap:none")
 
-        # persistir last_seed cedo (em memória; gravação em disco só sem --dry-run)
-        if not dry_run:
+        # persistir last_seed cedo (só se não for excl-dry e não for --dry-run)
+        if (not dry_run) and (not is_excluded):
             st_tmp = state.get(cid, {}).copy()
+            st_tmp.setdefault("first_seen_ts", int(time.time()))
             st_tmp["last_seed"] = float(seed_used)
             state[cid] = st_tmp
 
@@ -711,7 +737,23 @@ def main(dry_run=False):
         target_base = seed_used + COLCHAO_PPM
         target = target_base
 
-        # --- Escalada por persistência de baixo outbound (ANTES do ajuste de liquidez) ---
+        # ==== NEW INBOUND NORMALIZE (detecção) ====
+        st_prev = state.get(cid, {}) or {}
+        first_seen_ts = st_prev.get("first_seen_ts", int(time.time()))
+        hours_since_first = (int(time.time()) - first_seen_ts) / 3600 if first_seen_ts else 999
+
+        need_big_drop_vs_seed = (local_ppm >= max(seed_used*(1.0+NEW_INBOUND_MIN_DIFF_FRAC), seed_used + NEW_INBOUND_MIN_DIFF_PPM))
+        peer_opened = (initiator is False)  # se info disponível
+        new_inbound = (
+            NEW_INBOUND_NORMALIZE_ENABLE and
+            hours_since_first <= NEW_INBOUND_GRACE_HOURS and
+            out_ratio <= NEW_INBOUND_OUT_MAX and
+            (not fwd_count if NEW_INBOUND_REQUIRE_NO_FWDS else True) and
+            need_big_drop_vs_seed and
+            (peer_opened if initiator is not None else True)  # se não souber, assume possível
+        )
+
+        # --- Escalada por persistência (ANTES do ajuste de liquidez) ---
         streak = state.get(cid, {}).get("low_streak", 0)
         if PERSISTENT_LOW_ENABLE:
             if out_ratio < PERSISTENT_LOW_THRESH:
@@ -735,11 +777,17 @@ def main(dry_run=False):
                 else:
                     target = int(math.ceil(target * bump_mult))
 
+                # em new_inbound, NÃO sobe por persistência (queremos descer)
+                if new_inbound:
+                    target = target_base
+                else:
+                    pass
                 report.append(f"📈 Persistência: {alias} ({cid}) streak {streak} ⇒ bump {bump_acc*100:.0f}% ({bump_mode})")
 
         # --- Ajuste por liquidez ---
         if out_ratio < LOW_OUTBOUND_THRESH:
-            target *= (1.0 + LOW_OUTBOUND_BUMP)
+            if not new_inbound:  # não subir se for canal novo inbound
+                target *= (1.0 + LOW_OUTBOUND_BUMP)
         elif out_ratio > HIGH_OUTBOUND_THRESH:
             target *= (1.0 - HIGH_OUTBOUND_CUT)
             if fwd_count == 0 and out_ratio > 0.60:
@@ -751,8 +799,8 @@ def main(dry_run=False):
         negm_tag = ""
         boosted_target = target
 
-        # ⚡ surge (drenado)
-        if SURGE_ENABLE and out_ratio < SURGE_LOW_OUT_THRESH:
+        # ⚡ surge (drenado) — desligado em new_inbound
+        if (not new_inbound) and SURGE_ENABLE and out_ratio < SURGE_LOW_OUT_THRESH:
             lack = max(0.0, (SURGE_LOW_OUT_THRESH - out_ratio) / SURGE_LOW_OUT_THRESH)
             surge_bump = min(SURGE_BUMP_MAX, SURGE_K * lack)
             if surge_bump > 0:
@@ -773,7 +821,7 @@ def main(dry_run=False):
         target = clamp_ppm(boosted_target)
 
         pl_tags = []
-        if out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
+        if (not new_inbound) and out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
             target = local_ppm
             pl_tags.append("🙅‍♂️no-down-low")
 
@@ -793,10 +841,13 @@ def main(dry_run=False):
             discovery_hit = True
             cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
 
+        # NEW INBOUND: step cap maior só para reduzir
+        if new_inbound and local_ppm > target:
+            cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
+
         raw_step_ppm = target if local_ppm == 0 else apply_step_cap2(local_ppm, target, cap_frac, STEP_MIN_STEP_PPM)
 
         # Circuit breaker atua sobre raw_step_ppm
-        now_ts = int(time.time())
         state_all = state.get(cid, {})
         last_ppm  = state_all.get("last_ppm", local_ppm)
         last_dir  = state_all.get("last_dir", "flat")
@@ -808,7 +859,7 @@ def main(dry_run=False):
                 raw_step_ppm = clamp_ppm(int(raw_step_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
 
-        # Piso de rebal conforme REBAL_COST_MODE (com robustez: mapa _use)
+        # Piso de rebal conforme REBAL_COST_MODE
         if REBAL_FLOOR_ENABLE:
             base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
             if base_cost > 0:
@@ -828,7 +879,6 @@ def main(dry_run=False):
                 outrate_factor = OUTRATE_FLOOR_FACTOR_LOW
 
         if discovery_hit:
-            # em discovery, ignoramos outrate floor para permitir "prospecção" de preço
             outrate_floor_active = False
 
         if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
@@ -840,21 +890,31 @@ def main(dry_run=False):
 
         final_ppm = max(raw_step_ppm, floor_ppm)
 
-        # Diagnóstico: stepcap / floor-lock
+                # Diagnóstico: stepcap / floor-lock
         diag_tags = []
         if raw_step_ppm != target:
-            dir_same = (target > local_ppm and raw_step_ppm > local_ppm) or (target < local_ppm and raw_step_ppm < local_ppm)
+            dir_same = ((target > local_ppm and raw_step_ppm > local_ppm) or
+                        (target < local_ppm and raw_step_ppm < local_ppm))
             if dir_same:
                 diag_tags.append("⛔stepcap")
-        if final_ppm < target and final_ppm == floor_ppm:
+
+        # floor-lock: o piso determinou o final e impediu atingir o alvo (tanto na alta quanto na queda)
+        if final_ppm == floor_ppm and target != floor_ppm:
             diag_tags.append("🧱floor-lock")
+
         if final_ppm == local_ppm and target != local_ppm and floor_ppm <= local_ppm:
             diag_tags.append("⛔stepcap-lock")
+
         if discovery_hit:
             diag_tags.append("🧪discovery")
         for t in (surge_tag, top_tag, negm_tag):
             if t: diag_tags.append(t)
-        diag_tags += status_tags  # adiciona status 🟢on/🟢back
+        if new_inbound:
+            diag_tags.append(NEW_INBOUND_TAG)
+
+        if DEBUG_TAGS:
+            diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
+        diag_tags += status_tags  # 🟢on/🟢back/🔴off (se aplicável)
 
         all_tags = pl_tags + seed_tags + diag_tags
         new_ppm = final_ppm
@@ -882,17 +942,22 @@ def main(dry_run=False):
         fwds_since = max(0, fwd_count - fwds_at_change)
 
         if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
-            need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
-            if hours_since < need and fwds_since < COOLDOWN_FWDS_MIN:
-                will_push = False
-                all_tags.append(f"⏳cooldown{int(need)}h")
+            # em new_inbound, ignorar cooldown para quedas (queremos normalizar rápido)
+            if not (new_inbound and new_ppm < local_ppm):
+                need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
+                if hours_since < need and fwds_since < COOLDOWN_FWDS_MIN:
+                    will_push = False
+                    all_tags.append(f"⏳cooldown{int(need)}h")
+
+        # DRY context: --dry-run ou excluido
+        act_dry = dry_run or is_excluded
 
         if new_ppm != local_ppm and will_push:
             delta = new_ppm - local_ppm
             pct = (abs(delta) / local_ppm * 100.0) if local_ppm > 0 else 0.0
             dstr = f"{'+' if delta>0 else ''}{delta} ({pct:.1f}%)"
 
-            if dry_run:
+            if act_dry:
                 action = f"DRY set {local_ppm}→{new_ppm} ppm {dstr}"
                 new_dir = dir_for_emoji
             else:
@@ -920,7 +985,7 @@ def main(dry_run=False):
                             "baseline_fwd7d": new_base,
                             "low_streak": streak if PERSISTENT_LOW_ENABLE else 0,
                             "last_seed": float(seed_used),
-                            "fwds_at_change": fwd_count,   # <== registra amostra p/ cooldown
+                            "fwds_at_change": fwd_count,
                         })
                         state[cid] = st
                     else:
@@ -930,29 +995,41 @@ def main(dry_run=False):
                     action = f"❌ erro ao setar: {e}"
                     new_dir = "flat"
 
+            excl_note = " 🚷excl-dry" if is_excluded else ""
             report.append(
-                f"✅{emo} {alias}: {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
             )
-            if new_ppm > local_ppm: changed_up += 1
-            else: changed_down += 1
+            if is_excluded:
+                if new_ppm > local_ppm: excl_dry_up += 1
+                else: excl_dry_down += 1
+            else:
+                if new_ppm > local_ppm: changed_up += 1
+                else: changed_down += 1
 
         else:
-            # não aplicou (ou micro-update/cooldown segurou): mantém
-            if not dry_run:
+            # mantém (ou micro-update/cooldown segurou)
+            if (not act_dry):
                 st = state.get(cid, {}).copy()
+                st.setdefault("first_seen_ts", int(time.time()))
                 st["low_streak"] = streak if PERSISTENT_LOW_ENABLE else 0
                 st["last_seed"] = float(seed_used)
                 state[cid] = st
 
-            kept += 1
+            excl_note = " 🚷excl-dry" if is_excluded else ""
             report.append(
-                f"🫤⏸️ {alias}: mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
             )
+            if is_excluded:
+                excl_dry_kept += 1
+            else:
+                kept += 1
 
     # resumo na 2ª linha do relatório
     summary = f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips}"
     if SHARDING_ENABLE:
         summary += f" | shard_skips {shard_skips}"
+    if (excl_dry_up + excl_dry_down + excl_dry_kept) > 0:
+        summary += f" | excl_dry up {excl_dry_up} | down {excl_dry_down} | flat {excl_dry_kept}"
     report.insert(1, summary)
 
     if unmatched > 0:
@@ -964,12 +1041,11 @@ def main(dry_run=False):
 
     msg = "\n".join(report)
     print(msg)
-    if not dry_run:            # não envia quando for --dry-run
-        tg_send_big(msg)       # envia quebrado em blocos de ~4000 chars
+    if not dry_run:
+        tg_send_big(msg)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, EMA, ponderação por entrada, liquidez, boosts respeitando step cap, piso robusto, persistência over-current, discovery, circuit-breaker, SHARDING e COOLDOWN/histerese para execuções de 1h)")
+    parser = argparse.ArgumentParser(description="Auto fee LND (Amboss seed com guard, EMA, ponderação por entrada, liquidez, boosts respeitando step cap, piso robusto, persistência over-current, discovery, circuit-breaker, SHARDING, COOLDOWN e 🌱normalize de canais novos inbound; DRY para exclusão; DEBUG tags)")
     parser.add_argument("--dry-run", action="store_true", help="Simula: não aplica BOS e não grava STATE")
     args = parser.parse_args()
     main(dry_run=args.dry_run)
-
