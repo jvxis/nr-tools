@@ -1,507 +1,360 @@
-# Manual dos parâmetros
+# Manual Completo — AutoFee LND (Amboss/LNDg/BOS)
 
-Antes de tudo, dois conceitos rápidos:
+> Guia prático e direto para entender **todos os parâmetros** e **todas as tags** do seu script de auto-fees — com exemplos reais e dicas de tuning.
 
-* **PPM (parts per million)**: é “por milhão”. Ex.: 500 ppm = 0,000500 = 0,05% de fee proporcional.
-* **out\_ratio**: fração da capacidade do canal que está do **seu lado** (local\_balance / capacity).
-  Ex.: 0,30 = 30% dos sats estão do seu lado (liquidez “saindo” disponível).
+Este manual consolida:
 
-A cada execução, o script calcula um **alvo de fee** usando métricas (Amboss, custo de rebal, liquidez…), depois limita o tamanho do ajuste, aplica um piso de segurança, e **só então** define a nova fee.
+1. **Como o script decide as taxas**;
+2. **Todos os parâmetros** (com valores padrão e quando mexer);
+3. **Todas as tags/emojis do relatório**;
+4. **Exemplos de leitura**;
+5. **Perfis de ajuste rápido**.
 
----
-
-## Limites base
-
-### `BASE_FEE_MSAT = 0`
-
-* **O que é:** base fee fixa por HTLC, em milisats.
-* **No script atual:** está definido, mas **não é aplicado** ao chamar o `bos` (apenas a fee proporcional em ppm é ajustada).
-* **Quando mexer:** normalmente deixe em `0`. Se um dia quiser usar base fee, será preciso estender a função que chama o `bos` para também ajustar a base.
-
-### `MIN_PPM = 150`
-
-* **O que é:** **piso mínimo** de fee proporcional (protege receita).
-* **Efeito prático:** nunca deixa a fee cair abaixo disso — mesmo se o alvo sugerir menos.
-* **Aumentar quando:** você quer evitar operar quase de graça.
-* **Diminuir quando:** você quer competir agressivamente por volume em canais específicos.
-
-### `MAX_PPM = 2500`
-
-* **O que é:** **teto máximo** de fee proporcional.
-* **Efeito prático:** impede que ajustes “fujam da curva”.
-* **Aumentar quando:** canais muito premium ou rotas caras.
-* **Diminuir quando:** você quer forçar teto baixo para ser competitivo.
+Para uma visão geral rápida do **pipeline** e leitura das **tags**, você também pode conferir os manuais anteriores, que inspiraram esta versão:  e .
 
 ---
 
-## “Velocidade” de mudança por execução
+## 1) O que o script faz (visão geral)
 
-### `STEP_CAP = 0.05`
+Ele ajusta automaticamente o **fee rate (ppm)** de cada canal **aberto** no seu LND para maximizar **lucro com estabilidade**. O alvo é calculado a partir de:
 
-* **O que é:** **limite de variação por execução**, em fração. `0.05 = 5%`.
-* **Efeito prático:** se o alvo está muito distante da fee atual, você **anda só 5%** por rodada (suaviza oscilações).
-* **Dica:** quanto **mais frequente** for seu cron (ex.: a cada 15–30 min), **menor** pode ser o `STEP_CAP` (3–5%). Se rodar raramente (ex.: 1×/dia), 10–20% faz mais sentido.
+* **Sinal de mercado (seed Amboss p65 7d + guardas + EMA)**
+* **Liquidez do canal (out_ratio)** e **persistência de drenagem**
+* **Custo de rebalanço** (piso anti-prejuízo, global e/ou por canal)
+* **Histórico de forwards** (out_ppm7d, fwd_count)
+* **Boosts de demanda/receita** (surge/top revenue/margem negativa)
+* **Ritmo controlado** (step cap dinâmico, cooldown, anti micro-update)
+* **Segurança** (circuit breaker) e **sanidade** (clamps, floors, discovery)
 
----
-
-## Colchão fixo
-
-### `COLCHAO_PPM = 30`
-
-* **O que é:** um **extra fixo** somado ao alvo, para cobrir pequenas ineficiências/custos invisíveis.
-* **Aumentar quando:** você percebe que “no fio da navalha” ainda há prejuízo.
-* **Diminuir quando:** quer ser o mais competitivo possível.
+Se o canal está **offline**, ele **não aplica** mudança (gera um *skip* detalhado) e registra status no cache. Um guia com a anatomia das linhas e ícones também está no manual legado de tags. 
 
 ---
 
-## Política de variação por liquidez (faixa morta 5%–30%)
+## 2) Pipeline resumido
 
-Esses parâmetros ajustam o **alvo** dependendo do `out_ratio` (liquidez do seu lado):
-
-### `LOW_OUTBOUND_THRESH = 0.05`
-
-* **O que é:** **limite inferior** (5%). Abaixo disso, você está “drenado”.
-* **Efeito:** aplica **bump** (aumenta o alvo) para desincentivar saída.
-
-### `HIGH_OUTBOUND_THRESH = 0.30`
-
-* **O que é:** **limite superior** (30%). Acima disso, você está com “sobra” razoável.
-* **Efeito:** aplica **cut** (reduz o alvo) para estimular saída.
-
-### `LOW_OUTBOUND_BUMP = 0.05`
-
-* **O que é:** **quanto** aumentar o alvo quando `out_ratio < 5%`.
-  `0.05 = +5%` sobre o alvo.
-
-### `HIGH_OUTBOUND_CUT = 0.05`
-
-* **O que é:** **quanto** reduzir o alvo quando `out_ratio > 30%`.
-  `0.05 = −5%` sobre o alvo.
-
-### `IDLE_EXTRA_CUT = 0.01`
-
-* **O que é:** **corte extra** quando o canal está **bem cheio do seu lado** ( > 60% ) **e sem forwards** nos 7 dias.
-* **Valor baixo** (1%) = **quase nulo**; é um empurrãozinho para “acordar” canais ociosos.
-
-> **Como ajustar:**
-> • Se você **não quer reduzir** fee quando está drenado (ex.: `out_ratio < 5%`), mantenha `LOW_OUTBOUND_BUMP` e considere **bloquear quedas** nessa condição (feature opcional).
-> • Se quer respostas mais **rápidas à liquidez**, aumente os 5% para 10–20%.
+1. Snap do `lncli listchannels` (capacidade, saldos, pubkey, **active**).
+2. Se **offline** ⇒ `⏭️🔌 skip` (mostra há quanto tempo e último **online**).
+3. Carrega 7d do LNDg (forwards + payments de rebal).
+4. Busca **seed** Amboss (série 7d) e aplica guardas + **EMA**.
+5. Define **alvo base**: `seed + COLCHAO_PPM`.
+6. Ajusta por **liquidez** e **persistência** de drenagem.
+7. Aplica **boosts** (surge/top/neg margem) respeitando *step cap*.
+8. Calcula **pisos** (rebal floor + outrate floor), com *cap* pelo **seed**.
+9. **Step cap** (dinâmico), **cooldown** e **gate anti micro-update**.
+10. **Circuit breaker** se fluxo caiu após subida.
+11. Aplica via **BOS** (ou apenas imprime em *dry-run* / *excl-dry*).
+    (Para detalhes dos campos de linha/ícones, ver manual de tags. )
 
 ---
 
-## Peso do volume de ENTRADA do peer (Amboss)
+## 3) Parâmetros — guia completo (com “quando mexer”)
 
-### `VOLUME_WEIGHT_ALPHA = 0.10`
+> Dica: altere **poucos parâmetros por vez**, observe 2–3 dias e ajuste.
 
-* **O que é:** quanto o **share de entrada** do peer (nos seus canais) influencia o **seed** do Amboss.
-  O script ajusta o seed para cima/baixo se esse peer envia **muito** ou **pouco** tráfego **para você**.
-* **Faixa útil:** 0.0 (desliga) a 0.3 (forte).
-* **Prático:** 0.10 é um **tempero leve**; 0.30 é agressivo.
+### 3.1. Caminhos, tokens e integrações
+
+* `DB_PATH`: caminho do SQLite do LNDg.
+* `LNCLI`: binário do `lncli`.
+* `BOS`: caminho do `bos`.
+* `AMBOSS_TOKEN` / `AMBOSS_URL`: credenciais da Amboss.
+* `TELEGRAM_TOKEN` / `TELEGRAM_CHAT`: opcionais para envio automático do relatório.
+
+### 3.2. Janelas, cache e estado
+
+* `LOOKBACK_DAYS = 7`: janela usada para métricas.
+* `CACHE_PATH`, `STATE_PATH`: arquivos JSON com cache e estado (seed anterior, baseline de fwds, status online/offline, etc.).
+
+  * **Não editar manualmente**; são mantidos pelo script.
+
+### 3.3. Limites base e colchão
+
+* `BASE_FEE_MSAT = 0` (fees base fixas desativadas).
+* `MIN_PPM = 100`, `MAX_PPM = 1500`: clamp final absoluto.
+* `COLCHAO_PPM = 25`: “gordurinha” no alvo acima do seed.
+
+  * **Aumente** se quiser **capturar mais valor**; **reduza** se quiser preço mais colado ao seed.
+
+### 3.4. Política por liquidez (ajustes “leves”)
+
+* `LOW_OUTBOUND_THRESH = 0.05` (<5% outbound = drenado ⇒ +1%)
+* `HIGH_OUTBOUND_THRESH = 0.20` (>20% outbound ⇒ −1%)
+* `LOW_OUTBOUND_BUMP = 0.01`, `HIGH_OUTBOUND_CUT = 0.01`
+* `IDLE_EXTRA_CUT = 0.005` (queda extra quando ocioso com muita saída)
+
+  * **Agressivo**: subir `LOW_OUTBOUND_BUMP` para 0.02–0.03.
+
+### 3.5. Persistência de baixo outbound (streak)
+
+* `PERSISTENT_LOW_ENABLE = True`
+* `PERSISTENT_LOW_THRESH = 0.10` (define “baixo”)
+* `PERSISTENT_LOW_STREAK_MIN = 3` (mínimo de rodadas seguidas)
+* `PERSISTENT_LOW_BUMP = 0.05` (por rodada extra), `PERSISTENT_LOW_MAX = 0.20`
+* `PERSISTENT_LOW_OVER_CURRENT_ENABLE = True`: se alvo ≤ taxa atual, escala **em cima da atual** (evita ficar travado).
+* `PERSISTENT_LOW_MIN_STEP_PPM = 5`: passo mínimo nessa escalada.
+
+  * **Quando mexer**: se canais drenados **não sobem** o suficiente, aumente `PERSISTENT_LOW_BUMP` (ex.: 0.07–0.10).
+
+### 3.6. Peso do volume de **entrada** do peer (Amboss)
+
+* `VOLUME_WEIGHT_ALPHA = 0.20`: peers que trazem muita **entrada** ficam com seed ponderado maior/menor vs média.
+
+  * **Aumente** se quiser priorizar peers que te abastecem; **0** para desligar.
+
+### 3.7. Circuit breaker
+
+* `CB_WINDOW_DAYS = 7`, `CB_DROP_RATIO = 0.70`
+* `CB_REDUCE_STEP = 0.10` (recuo de 10%)
+* `CB_GRACE_DAYS = 7` (janela curta para reagir cedo)
+
+  * Protege contra “subi e matei o fluxo”.
+
+### 3.8. Pisos (anti-prejuízo)
+
+**Rebal floor** (piso pelo custo de rebalanço):
+
+* `REBAL_FLOOR_ENABLE = True`
+* `REBAL_FLOOR_MARGIN = 0.15` (piso = custo*(1+15%))
+* `REBAL_COST_MODE = "per_channel" | "global" | "blend"`
+* `REBAL_BLEND_LAMBDA = 0.30` (para “blend”: 30% global + 70% canal)
+* `REBAL_PERCHAN_MIN_VALUE_SAT = 200_000` (confiança mínima no custo por canal)
+* `REBAL_FLOOR_SEED_CAP_FACTOR = 1.6` (floor **não** pode subir demais vs seed)
+
+**Outrate floor** (piso por *out_ppm7d*):
+
+* `OUTRATE_FLOOR_ENABLE = True`
+* `OUTRATE_FLOOR_FACTOR = 1` (ou `0.95` com dinâmico)
+* `OUTRATE_FLOOR_MIN_FWDS = 5` (amostra mínima)
+* **Dinâmico**:
+
+  * `OUTRATE_FLOOR_DYNAMIC_ENABLE = True`
+  * `OUTRATE_FLOOR_DISABLE_BELOW_FWDS = 3` (desliga para amostra baixa)
+  * `OUTRATE_FLOOR_FACTOR_LOW = 0.95` (piso um pouco menor entre 3–9 fwds)
+
+> Dica: **se aparecer muito `🧱floor-lock`**, você está **“vendendo barato”** vs custo. Ou o custo está alto demais (rebal caro). Ajuste margem/disable dinâmico com cuidado. Referência de leitura de tags: 
+
+### 3.9. Discovery (prospecção de preço)
+
+* `DISCOVERY_ENABLE = True`
+* `DISCOVERY_OUT_MIN = 0.30` (muita saída sobrando)
+* `DISCOVERY_FWDS_MAX = 0` (sem forwards)
+* Drops extras para ociosos duros:
+
+  * `DISCOVERY_HARDDROP_DAYS_NO_BASE = 14`
+  * `DISCOVERY_HARDDROP_CAP_FRAC = 0.20` (step cap de queda)
+  * `DISCOVERY_HARDDROP_COLCHAO = 10` (colchão menor para acelerar descida)
+
+### 3.10. Seed smoothing (EMA)
+
+* `SEED_EMA_ALPHA = 0.20`: suaviza saltos do seed Amboss.
+
+### 3.11. Lucro/Demanda — boosts
+
+* **Surge** (drenagem forte):
+
+  * `SURGE_ENABLE = True`
+  * `SURGE_LOW_OUT_THRESH = 0.10`, `SURGE_K = 0.50`, `SURGE_BUMP_MAX = 0.20`
+* **Top revenue** (peer com grande share da sua receita de saída):
+
+  * `TOP_REVENUE_SURGE_ENABLE = True`
+  * `TOP_OUTFEE_SHARE = 0.20`, `TOP_REVENUE_SURGE_BUMP = 0.12`
+* **Margem 7d negativa**:
+
+  * `NEG_MARGIN_SURGE_ENABLE = True`
+  * `NEG_MARGIN_SURGE_BUMP = 0.08`, `NEG_MARGIN_MIN_FWDS = 5`
+
+> Todas respeitam *step cap* se `SURGE_RESPECT_STEPCAP = True`.
+
+### 3.12. Anti micro-update (BOS)
+
+* `BOS_PUSH_MIN_ABS_PPM = 10`, `BOS_PUSH_MIN_REL_FRAC = 0.03`
+  Evita “ruído” em mudanças pequenas (a não ser que o **floor** force).
+
+### 3.13. Offline skip
+
+* `OFFLINE_SKIP_ENABLE = True`
+  Mantém cache de status por canal: **🟢on / 🔴off / 🟢back** (voltou).
+  (Manual de leitura de status nas linhas: )
+
+### 3.14. Cooldown / Histerese
+
+* `APPLY_COOLDOWN_ENABLE = True`
+* `COOLDOWN_HOURS_UP = 3`, `COOLDOWN_HOURS_DOWN = 6`
+* `COOLDOWN_FWDS_MIN = 2` (pede algum tráfego entre mudanças)
+* **Queda em rota lucrativa exige ainda mais cautela**:
+
+  * `COOLDOWN_PROFIT_DOWN_ENABLE = True`
+  * `COOLDOWN_PROFIT_MARGIN_MIN = 0` (margin>0)
+  * `COOLDOWN_PROFIT_FWDS_MIN = 10` (e fwd_count≥10)
+
+### 3.15. Sharding (opcional)
+
+* `SHARDING_ENABLE = False`
+* `SHARD_MOD = 3` ⇒ cada canal é tratado ~1/3 das rodadas.
+  Mostra `⏭️🧩 ... skip (shard X/Y)` quando “fora do slot”. 
+
+### 3.16. Normalização de **novo inbound** (peer abriu o canal)
+
+* `NEW_INBOUND_NORMALIZE_ENABLE = True`
+* Janela: `NEW_INBOUND_GRACE_HOURS = 48`
+* Características do canal “novo inbound”:
+
+  * `NEW_INBOUND_OUT_MAX = 0.05` (out ~0)
+  * `NEW_INBOUND_REQUIRE_NO_FWDS = True` (sem forwards)
+  * Só ativa se **taxa atual** for bem **acima do seed**:
+
+    * `NEW_INBOUND_MIN_DIFF_FRAC = 0.25` e `NEW_INBOUND_MIN_DIFF_PPM = 50`
+  * Step cap **maior para reduzir**: `NEW_INBOUND_DOWN_STEPCAP_FRAC = 0.15`
+  * Tag: `NEW_INBOUND_TAG = "🌱new-inbound"`
+  * Efeitos colaterais: desliga **surge**, ignora persistência de alta e **ignora cooldown para cair** (apenas nesse caso).
+
+### 3.17. Classificação dinâmica (sink/source/router)
+
+* `CLASSIFY_ENABLE = True`
+* `CLASS_BIAS_EMA_ALPHA = 0.45` (EMA do viés in/out)
+* Amostra mínima:
+
+  * `CLASS_MIN_FWDS = 6`, `CLASS_MIN_VALUE_SAT = 60_000`
+* Limiares:
+
+  * **Sink**: `SINK_BIAS_MIN = 0.50` e `SINK_OUTRATIO_MAX = 0.15`
+  * **Source**: `SOURCE_BIAS_MIN = 0.35` (via |bias|), `SOURCE_OUTRATIO_MIN = 0.58`
+  * **Router**: `ROUTER_BIAS_MAX = 0.25` (|bias| pequeno com tráfego nos dois sentidos)
+  * Histerese de decisão: `CLASS_CONF_HYSTERESIS = 0.10`
+* Políticas por classe:
+
+  * **Sink**: `SINK_EXTRA_FLOOR_MARGIN = 0.05`, `SINK_MIN_OVER_SEED_FRAC = 0.90` (não descer abaixo de 90% do seed)
+  * **Source**: `SOURCE_SEED_TARGET_FRAC = 0.60` (prefere alvo mais baixo nas quedas), `SOURCE_DISABLE_OUTRATE_FLOOR = True`
+  * **Router**: `ROUTER_STEP_CAP_BONUS = 0.02` (+2 pp de reatividade)
+* Tags: `TAG_SINK = "🏷️sink"`, `TAG_SOURCE = "🏷️source"`, `TAG_ROUTER = "🏷️router"`, `TAG_UNKNOWN = "🏷️unknown"`
+
+### 3.18. Modo “Extreme drain” (drenado crônico com demanda)
+
+* `EXTREME_DRAIN_ENABLE = True`
+* Ativa se: `low_streak ≥ EXTREME_DRAIN_STREAK (20)` **e** `out_ratio < 0.03` **e** `baseline_fwd7d>0`.
+* Efeito: `EXTREME_DRAIN_STEP_CAP = 0.15` (step cap maior **para subir**) e `EXTREME_DRAIN_MIN_STEP_PPM = 15`.
+
+### 3.19. Piso por tráfego em **super-rotas** (Revenue floor)
+
+* `REVFLOOR_ENABLE = True`
+* `REVFLOOR_BASELINE_THRESH = 150` (canal muito ativo)
+* `REVFLOOR_MIN_PPM_ABS = 140` (e considera `seed*0.40`)
+* Força um **mínimo** extra quando a rota roda muito.
+
+### 3.20. Depuração e exclusões
+
+* `DEBUG_TAGS = True` (exibe `🧬seedcap:none` e `🔍t{target}/r{raw}/f{floor}` no fim da linha)
+* `EXCL_DRY_VERBOSE = True` (mostra **linha completa** para peers excluídos)
+
+  * CLI: `--excl-dry-verbose` ou `--excl-dry-tag-only` (só imprime `🚷excl-dry`)
+* `EXCLUSION_LIST = {...}`: pubkeys ignorados (apenas *dry-run* na saída).
 
 ---
 
-## Circuit breaker (anti-queda de receita)
+## 4) Tags & Emojis — dicionário rápido
 
-Quando você **aumenta** a fee e, em seguida, os forwards **desabam** na janela de graça, o circuito corta um pouco a fee.
+> A anatomia completa com exemplos ilustrados está no manual de tags anterior, que permanece 100% válido para leitura e interpretação (ícones de ação, `alvo`, `out_ratio`, `seed`, `floor`, `marg`, `rev_share`, etc.). 
 
-### `CB_WINDOW_DAYS = 7`
+**Principais:**
 
-* **Observação:** parâmetro “documental”. A janela efetiva já é de 7 dias pelo `LOOKBACK_DAYS`. (No código atual, `CB_WINDOW_DAYS` não é lido diretamente.)
-
-### `CB_DROP_RATIO = 0.60`
-
-* **O que é:** se os forwards atuais ficarem **abaixo de 60%** do “baseline” após uma alta, considera “queda forte”.
-
-### `CB_REDUCE_STEP = 0.15`
-
-* **O que é:** **quanto reduzir** (15%) quando o circuito dispara.
-
-### `CB_GRACE_DAYS = 10`
-
-* **O que é:** **período de observação** após uma subida. Se o canal performar mal dentro desse prazo, aplica o corte.
-
-> **Dica:** se você é conservador com receita, **aumente** `CB_REDUCE_STEP` (ex.: 0.20) e/ou `CB_GRACE_DAYS` (ex.: 14).
+* **Ação**: `✅🔺` (subiu), `✅🔻` (desceu), `🫤⏸️` (manteve), `⏭️🔌` (skip offline), `⏭️🧩` (skip shard). 
+* **Seed guards**: `🧬seedcap:p95`, `🧬seedcap:prev+X%`, `🧬seedcap:abs`, `🧬seedcap:none`. 
+* **Liquidez**: `🙅‍♂️no-down-low` (bloqueia queda drenado), `🌱new-inbound`.
+* **Ritmo e travas**: `⛔stepcap`, `⛔stepcap-lock`, `🧱floor-lock`, `🧘hold-small`, `⏳cooldown...`, `🧯 CB:`. 
+* **Boosts**: `⚡surge+X%`, `👑top+...`, `💹negm+8%`. 
+* **Classe**: `🏷️sink`, `🏷️source`, `🏷️router`, `🏷️unknown` + `🧭bias±0.xx` (debug).
+* **Status**: `🟢on`, `🟢back`, `🔴off`. 
+* **Exclusão**: `🚷excl-dry` (linha *dry* para peers excluídos). 
+* **Debug final**: `🔍t{alvo}/r{raw_step}/f{floor}` (quando `DEBUG_TAGS=True`). 
 
 ---
 
-## Proteção de custo de rebal (PISO)
+## 5) Exemplos de leitura
 
-Garante que a fee **não fique abaixo** do **custo de rebal** (para não operar no prejuízo).
+### (A) Drenado + receita alta
 
-### `REBAL_FLOOR_ENABLE = True`
+```
+✅🔺 speedupln.com: set 494→566 ppm (+14.6%) | alvo 570 | out_ratio 0.07 | out_ppm7d≈410 | seed≈480 | floor≥450 | marg≈-20 | rev_share≈0.22 | ⚡surge+18% 👑top+12% ⛔stepcap 🔍t570/r566/f450 🟢on
+```
 
-* **Liga/desliga** essa proteção.
+* Drenado (`out_ratio` baixo) + **top revenue** ⇒ alvo subiu com **boosts**; *step cap* limitou a subida desta rodada.
 
-### `REBAL_FLOOR_MARGIN = 0.10`
+### (B) Sobrando saída + sem forwards (discovery)
 
-* **Margem** acima do custo médio 7 d.
-  Ex.: custo=700 ppm → piso = `700 * (1+0.10) = 770 ppm`.
+```
+🫤⏸️ PeerABC: mantém 300 ppm | alvo 285 | out_ratio 0.62 | out_ppm7d≈0 | seed≈260 | floor≥240 | rev_share≈0.00 | 🧪discovery ⛔stepcap 🔍t285/r285/f240 🟢on
+```
 
-**De onde vem o custo?**
-Depende do modo abaixo:
+* Discovery ativo (sem forwards) ⇒ *out-floor* desativado; *step cap* ainda pode segurar a queda.
 
----
+### (C) Piso travando (floor-lock)
 
-## Composição do custo no ALVO
+```
+🫤⏸️ hqq: mantém 1100 ppm | alvo 900 | out_ratio 0.08 | out_ppm7d≈739 | seed≈665 | floor≥1065 | marg≈-535 | 🧱floor-lock 🔍t900/r900/f1065 🟢on
+```
 
-### `REBAL_COST_MODE = "per_channel" | "global" | "blend"`
+* Seu **piso** (custo + margem e/ou outrate) ficou **acima** do alvo: não dá para baixar hoje. Ajuste custos ou margens para destravar.
 
-* **"global"**: usa **média de custo de rebal** de **todos** os canais (últimos 7 d).
-  *Bom quando há pouco rebal por canal e você quer um piso simples.*
-* **"per\_channel"**: usa o custo **do próprio canal** (se houver; senão cai para o global).
-  *Melhor proteção por canal — evita “subsidiar” canais mais caros com os baratos.*
-* **"blend"**: mistura os dois.
-
-### `REBAL_BLEND_LAMBDA = 0.30`
-
-* **Só para "blend":** peso do **global**.
-  Ex.: `0.30` → alvo usa **30% global + 70% por canal**.
-
----
-# Escalada por persistência de baixo outbound (visão geral)
-
-**Motivo de existir:**
-Às vezes um canal fica **persistentemente com pouco saldo do seu lado** (`out_ratio` baixo) e **não reage** só com o ajuste de liquidez padrão (que dá um empurrão pequeno e imediato). A “escada” cria um **aumento progressivo no alvo** a cada rodada consecutiva nessa situação, até um teto. Isso:
-
-* desincentiva ainda mais a **saída** via esse canal (quando você já está drenado);
-* dá **tempo** para o mercado/rebalances corrigirem a liquidez;
-* evita saltos bruscos, porque respeita o **STEP\_CAP** e tem **teto acumulado**.
-
-> Em resumo: se o canal segue “seco” por várias rodadas, a taxa **sobe aos poucos** de forma controlada até forçar uma correção de rota/liquidez.
+> Exemplos de anatomia de linha e interpretação também estão no manual de tags anterior. 
 
 ---
 
-## Parâmetros
+## 6) Dúvidas rápidas (FAQ)
 
-* `PERSISTENT_LOW_ENABLE` — **Liga/desliga** a escada.
-  *Por que existe:* permitir experimentar ou comparar o comportamento com/sem escalada.
+* **Por que não aplicou a mudança?**
+  Veja as tags: pode ser `⏳cooldown...`, `🧘hold-small`, `⛔stepcap-lock` ou `🧱floor-lock`.
 
-* `PERSISTENT_LOW_THRESH` — Limiar de **out\_ratio** abaixo do qual a rodada conta como “baixa liquidez persistente”.
-  *Por que existe:* define “quando começa a doer”; use abaixo do seu `HIGH_OUTBOUND_THRESH` para detectar “baixo” antes do corte padrão.
+* **Por que `🚷excl-dry` aparece?**
+  O peer está na lista de exclusão. Você vê **o que seria feito**, mas nada é aplicado. É possível trocar entre **linha detalhada** e **apenas tag** com `--excl-dry-verbose` / `--excl-dry-tag-only`.
 
-* `PERSISTENT_LOW_STREAK_MIN` — **Número mínimo de rodadas seguidas** abaixo do limiar para **começar a aplicar** o aumento acumulado.
-  *Por que existe:* evita reagir a flutuações pontuais; só age quando o problema é **persistente**.
-
-* `PERSISTENT_LOW_BUMP` — **Incremento percentual por rodada** de streak **depois** de atingir o mínimo.
-  *Por que existe:* controla o **ritmo** de escalada (ex.: +2% no alvo por rodada contínua).
-
-* `PERSISTENT_LOW_MAX` — **Teto** para o **acumulado** da escalada (ex.: +10% máx.).
-  *Por que existe:* garante que a escada **não fuja** e continue compatível com `STEP_CAP` e com a realidade do mercado.
+* **Como sei que está offline/voltou?**
+  O relatório mostra `⏭️🔌 ... skip: canal offline`, e depois `🟢back` quando voltar. (Convenção de ícones explicada no manual de tags.) 
 
 ---
 
-### Como atua (em uma linha)
+## 7) Perfis de tuning prontos
 
-Quando `out_ratio < PERSISTENT_LOW_THRESH` por `PERSISTENT_LOW_STREAK_MIN` rodadas, o alvo é multiplicado por
-`(1 + bump_acumulado)`, onde
-`bump_acumulado = min(PERSISTENT_LOW_MAX, (streak - STREAK_MIN + 1) * PERSISTENT_LOW_BUMP)`.
+**(A) Agressivo em drenagem/lucro**
 
----
+* `PERSISTENT_LOW_BUMP = 0.07–0.10`, `PERSISTENT_LOW_MAX = 0.30`
+* `SURGE_K = 0.8`, `SURGE_BUMP_MAX = 0.45`
+* `STEP_CAP_LOW_005 = 0.18`, `STEP_CAP_LOW_010 = 0.12`
+* `TOP_REVENUE_SURGE_BUMP = 0.15`
+* **Mantenha pisos ligados** para não vender abaixo do custo.
 
-### Observações importantes
+**(B) Conservador/estável**
 
-* A escada **respeita `STEP_CAP`**: mesmo que o alvo suba +10%, a taxa **só anda** até o limite por rodada (ex.: 5%).
-* O streak **zera** assim que `out_ratio ≥ PERSISTENT_LOW_THRESH`.
-* O streak é salvo no **STATE**; ele **não avança** se você só roda em `--dry-run` (pois `STATE` não é gravado).
+* `PERSISTENT_LOW_BUMP = 0.04`
+* `SURGE_K = 0.45`, `SURGE_BUMP_MAX = 0.25`
+* `STEP_CAP = 0.04`, `STEP_CAP_LOW_005 = 0.08`
+* `BOS_PUSH_MIN_ABS_PPM = 12` (menos updates)
 
-# Parâmetros novos do **Seed Guard** (Amboss)
+**(C) Descoberta (encher canais ociosos)**
 
-## Visão geral
-
-O *seed* é a estimativa de preço de entrada do seu peer (Amboss, métrica `incoming_fee_rate_metrics.weighted_corrected_mean`). Em mercados voláteis, essa métrica pode “espikar” e empurrar o **alvo** para valores absurdos.
-O **Seed Guard** suaviza esses picos antes do seed entrar no cálculo do alvo.
-
-> Lembrete do alvo: **target = seed\_capado + COLCHAO\_PPM**, depois ajustado por liquidez.
-> O **custo de rebal** não entra no alvo — ele é usado **só como piso (floor)**, conforme `REBAL_COST_MODE`.
-
----
-
-## Parâmetros novos
-
-### `SEED_GUARD_ENABLE` *(bool)*
-
-* **O que faz:** Liga/desliga todas as proteções do seed.
-* **Padrão sugerido:** `True`
-* **Quando mudar:** Desative apenas para depurar ou comparar comportamento “cru”.
+* `DISCOVERY_ENABLE = True` (como já está)
+* `OUTRATE_FLOOR_DYNAMIC_ENABLE = True` (para desligar em amostra baixa)
+* `STEP_CAP_IDLE_DOWN = 0.15` (desce mais rápido quando sem forwards)
 
 ---
 
-### `SEED_GUARD_MAX_JUMP` *(float, 0–1)*
+## 8) Execução
 
-* **O que faz:** Limita o **salto máximo** do seed em relação ao **seed anterior do mesmo canal** (gravado no `STATE`).
-* **Exemplo:** `0.50` ⇒ o seed desta rodada não pode crescer mais de **50%** sobre o `last_seed`.
-* **Efeito prático:** Evita que um *spike* único de mercado estoure seu alvo numa única rodada.
-* **Padrão sugerido:** `0.50`
-* **Aperte mais se ver picos frequentes:** `0.25` (25%) ou até `0.15`.
+CLI:
 
-> ⚠️ O `last_seed` **só é salvo** quando você roda **sem** `--dry-run`. Em `--dry-run`, o guard usa o histórico já gravado.
+```bash
+python3 brln-autofee-2.py           # executa “valendo”
+python3 brln-autofee-2.py --dry-run # só simula (mantém classe se DRYRUN_SAVE_CLASS=True)
+# Verbosidade dos excluídos:
+python3 brln-autofee-2.py --excl-dry-verbose   # padrão (linha completa)
+python3 brln-autofee-2.py --excl-dry-tag-only  # só “🚷excl-dry”
+```
 
----
+Cron (ex. 1×/hora):
 
-### `SEED_GUARD_P95_CAP` *(bool)*
-
-* **O que faz:** Calcula o **percentil 95 (p95)** da **série 7d** do Amboss e **capa** o seed a esse p95.
-* **Motivação:** Picos muito recentes costumam aparecer acima do p95 — cortar nesses casos remove outliers sem perder a tendência.
-* **Padrão sugerido:** `True`
-* **Quando desligar:** Se quiser ver o seed “cru” para auditoria.
-
----
-
-### `SEED_GUARD_ABS_MAX_PPM` *(int ou 0)*
-
-* **O que faz:** Define um **teto absoluto** para o seed (em ppm). Se `0` ou `None`, não aplica teto.
-* **Padrão sugerido:** `2000`
-* **Quando reduzir:** Se você quer uma política **sempre** abaixo de um certo nível (ex.: `1500`).
-* **Quando aumentar:** Se atua em nichos de alto custo e precisa permitir seeds elevados (ex.: `3000`), lembrando que o `MAX_PPM` global ainda limita a taxa final.
-
----
-
-## Como o Seed Guard decide (ordem das travas)
-
-Para cada canal:
-
-1. Busca série 7d do Amboss e calcula o **p65 bruto** (seed “cru”).
-2. **p95-cap** (se ligado): `seed = min(seed, p95)`.
-3. **Max jump vs anterior**: `seed ≤ last_seed * (1 + SEED_GUARD_MAX_JUMP)`.
-4. **Teto absoluto**: `seed ≤ SEED_GUARD_ABS_MAX_PPM` (se > 0).
-5. O **seed capado** vira `seed_usado` no **alvo**: `target = seed_usado + COLCHAO_PPM`.
-
-> Dica: no relatório aparece `seed≈<valor>` e, se foi capado por qualquer trava, `seed≈<valor> (cap)`.
-
----
-
-## Interações importantes
-
-* **`COLCHAO_PPM`**: é somado ao seed **após** o guard. Aumente se quiser margem fixa maior acima do preço de entrada.
-* **Liquidez (`out_ratio`)**: depois do `seed+colchão`, aplicam-se os ajustes:
-
-  * drenado (`< LOW_OUTBOUND_THRESH`) ⇒ leve **alta**,
-  * sobra (> `HIGH_OUTBOUND_THRESH`) ⇒ leve **queda**, com corte extra se estiver ocioso.
-* **Rebal cost**: **não** soma no alvo. É usado **apenas como piso** via `REBAL_COST_MODE`:
-
-  * `per_channel`: piso pelo custo do **próprio canal** (fallback para global se sem histórico),
-  * `global`: piso pelo custo **global**,
-  * `blend`: piso pela **mistura** `λ*global + (1-λ)*canal`.
+```cron
+0 * * * * /usr/bin/python3 /home/admin/lndtools/brln-autofee-2.py >> /home/admin/lndtools/autofee.log 2>&1
+```
 
 ---
 
 
-## Exemplos rápidos
 
-* **Spike absurdo no peer (tipo Kappa)**
-  Config:
-
-  ```py
-  SEED_GUARD_ENABLE = True
-  SEED_GUARD_MAX_JUMP = 0.25
-  SEED_GUARD_P95_CAP = True
-  SEED_GUARD_ABS_MAX_PPM = 1800
-  ```
-
-  Efeito: o seed não sobe mais que 25% vs rodada anterior, é cortado no p95 da série e nunca passa de 1800 ppm.
-
-* **Ambiente estável, menos travas**
-
-  ```py
-  SEED_GUARD_ENABLE = True
-  SEED_GUARD_MAX_JUMP = 0.60
-  SEED_GUARD_P95_CAP = False
-  SEED_GUARD_ABS_MAX_PPM = 0
-  ```
-
-  Efeito: só limita salto por histórico, aceita picos respeitando `MAX_PPM`.
-
----
-
-## Boas práticas de operação
-
-* **Rodadas “a seco” (`--dry-run`)** em cron e **aplicação real** manual/alternada:
-  Você inspeciona os “cap” no seed antes de aplicar. Lembre que **dry-run não atualiza `last_seed`**.
-* Se o seed **vive capado**, avalie:
-
-  * Aumentar `COLCHAO_PPM` (se está muito “no osso”),
-  * Relaxar `SEED_GUARD_MAX_JUMP` **ou** subir `SEED_GUARD_ABS_MAX_PPM`,
-  * Ver se o peer realmente ficou mais caro de entrar (mudança estrutural de rota).
-* Se o seed **quase nunca é capado**, mas ainda acha “alto/baixo”:
-
-  * Ajuste `VOLUME_WEIGHT_ALPHA` (peso do volume de entrada),
-  * Revise `HIGH_OUTBOUND_CUT`/`LOW_OUTBOUND_BUMP`.
-
----
-
-## Tabela-resumo (valores sugeridos)
-
-| Parâmetro                | Sugerido | Papel                                  |
-| ------------------------ | -------- | -------------------------------------- |
-| `SEED_GUARD_ENABLE`      | `True`   | Liga o guard                           |
-| `SEED_GUARD_MAX_JUMP`    | `0.50`   | Limite +50% vs seed anterior por canal |
-| `SEED_GUARD_P95_CAP`     | `True`   | Corta seed acima do p95 da série 7d    |
-| `SEED_GUARD_ABS_MAX_PPM` | `2000`   | Teto absoluto do seed (0=desativa)     |
-
-
-
-## Como escolher valores (receitas rápidas)
-
-* **Perfil conservador (evitar prejuízo):**
-  `MIN_PPM` 200–300 • `STEP_CAP` 0.03–0.05 • `COLCHAO_PPM` 30–50 • `LOW/HIGH_*` 0.05–0.10 • `REBAL_FLOOR_MARGIN` 0.10–0.20 • `REBAL_COST_MODE` = `"per_channel"`.
-
-* **Perfil competitivo (buscar volume):**
-  `MIN_PPM` 100–150 • `STEP_CAP` 0.10–0.20 • `COLCHAO_PPM` 10–20 • `LOW/HIGH_*` 0.02–0.05 • `REBAL_FLOOR_MARGIN` 0.05–0.10.
-
-* **Cron e STEP\_CAP:**
-  Rodando **mais vezes por dia** → `STEP_CAP` **menor**.
-  Rodando **poucas vezes** → `STEP_CAP` **maior**.
-
----
-
-# Manual do “Piso pelo Out-Rate” (`out_ppm7d`)
-
-Este módulo opcional impede que a taxa caia **abaixo do que o canal efetivamente cobrou** nos últimos 7 dias, usando o **histórico de forwards** como um “piso” adicional. Ele se soma ao piso já existente de **custo de rebal**.
-
----
-
-## Parâmetros
-
-### `OUTRATE_FLOOR_ENABLE` (bool)
-
-* **O que faz:** Liga/desliga o piso baseado no **out\_ppm7d** (média de ppm efetiva dos forwards de saída na janela).
-* **Quando atua:** Apenas quando há forwards suficientes na janela (ver `OUTRATE_FLOOR_MIN_FWDS`).
-* **Padrão sugerido:** `True`
-* **Use quando:** Você quer evitar reduzir a taxa para baixo do que o canal comprovadamente conseguiu cobrar recentemente.
-
----
-
-### `OUTRATE_FLOOR_FACTOR` (float, 0–1.5)
-
-* **O que faz:** Fatora o `out_ppm7d` para formar o piso.
-* **Fórmula:** `outrate_floor = ceil(out_ppm7d * OUTRATE_FLOOR_FACTOR)`
-* **Efeito prático:**
-
-  * `0.90` → **não descer** abaixo de \~90% do `out_ppm7d`.
-  * `1.00` → **não descer** abaixo do `out_ppm7d` integral (mais rígido, pode “prender” a taxa).
-  * `>1.00` → piso **acima** do out-rate; raramente desejável.
-* **Faixa recomendada:** `0.80 – 0.95`
-* **Padrão sugerido:** `0.90`
-
----
-
-### `OUTRATE_FLOOR_MIN_FWDS` (int)
-
-* **O que faz:** Exige um **mínimo de forwards** na janela para considerar `out_ppm7d` estatisticamente confiável.
-* **Por quê:** Evita “grudar” taxa por causa de 1–2 forwards atípicos.
-* **Padrão sugerido:** `5`
-* **Ajuste conforme volume:**
-
-  * Canais de **alto** volume: 10–20
-  * Canais de **baixo** volume: 3–5
-
----
-
-## Como o piso pelo out-rate se combina com o piso de rebal
-
-* O **piso efetivo** é:
-  **`floor_ppm_final = max( piso_rebal , outrate_floor )`**
-* `piso_rebal` vem da sua estratégia de custo: **per\_channel**, **global** ou **blend** (com margem `REBAL_FLOOR_MARGIN`).
-* Se **não houver** forwards suficientes (`fwd_count < OUTRATE_FLOOR_MIN_FWDS`) ou `out_ppm7d == 0`, **o piso pelo out-rate não atua** — vale só o piso de rebal.
-
----
-
-## Ordem das etapas (resumo mental)
-
-1. **Alvo-base**: `target_base = seed_p65 + COLCHAO_PPM`
-2. **Ajuste por liquidez** (LOW/HIGH outbound) → `target`
-3. **Step-cap**: aproxima taxa atual até `target` com limite de variação por rodada
-4. **Pisos**:
-
-   * Piso de **rebal** (global/per-channel/blend)
-   * Piso por **out-rate** (se habilitado e com forwards suficientes)
-     → **aplica o maior dos pisos**
-5. **Resultado final**: `new_ppm = max(step_capped_target, floor_ppm_final)`
-
----
-
-## Exemplos rápidos
-
-### 1) Canal com histórico bom
-
-* `out_ppm7d = 300`, `fwd_count = 12`
-* `OUTRATE_FLOOR_FACTOR = 0.90` ⇒ `outrate_floor = 270`
-* `piso_rebal = 220` ⇒ **piso final = 270**
-* Se o `target` vier abaixo de 270, o script **não** desce além de 270.
-
-### 2) Canal novo ou quase sem forwards
-
-* `fwd_count = 1` (< `OUTRATE_FLOOR_MIN_FWDS`) ⇒ **piso por out-rate inativo**
-* Piso vem **só do rebal** (per-channel/global/blend)
-* Taxa pode cair (ou subir) sem “travar” por out\_ppm7d.
-
-### 3) Canal caro por rebal
-
-* `piso_rebal = 1200`, `out_ppm7d = 400`
-* `outrate_floor = 360` ⇒ **piso final = 1200**
-* O custo de rebal “manda” no piso — evita prejuízo ao reequilibrar.
-
----
-
-## Recomendações de uso
-
-* **Comece com:**
-
-  ```python
-  OUTRATE_FLOOR_ENABLE   = True
-  OUTRATE_FLOOR_FACTOR   = 0.90
-  OUTRATE_FLOOR_MIN_FWDS = 5
-  ```
-* Se perceber que taxas **não descem** quando o mercado esfria, reduza o **FACTOR** (ex.: 0.85).
-* Se o canal tem **muito ruído** (poucos forwards na janela), aumente o **MIN\_FWDS**.
-* **Evite 1.00** em `OUTRATE_FLOOR_FACTOR` se você quer que o preço siga o mercado para baixo.
-
----
-
-## Dúvidas frequentes
-
-**“Isso pode impedir quedas saudáveis de taxa?”**
-Pode, se você definir um fator alto (≥1.0) ou um mínimo de forwards muito baixo — ajuste com parcimônia.
-
-**“E se o out\_ppm7d for artificialmente alto por alguns forwards raros?”**
-É por isso que existe `OUTRATE_FLOOR_MIN_FWDS`. Aumente o mínimo para exigir mais amostragem antes de ativar o piso.
-
-**“Qual piso prevalece?”**
-Sempre o **maior** entre rebal e out-rate.
-
----
-
-## Exemplo numérico (cálculo do alvo)
-
-1. **Seed (Amboss)** ajustado pelo volume do peer: `p65 = 380 ppm`.
-2. **Alvo-base** = **seed + colchão** = `380 + 30 = 410 ppm`.
-3. **Liquidez**: `out_ratio = 0.03` (< 0.05) ⇒ `LOW_OUTBOUND_BUMP = +5%`
-   → **alvo** = `410 * 1.05 = 430,5` ⇒ **431 ppm** (arredondado).
-4. **Clamp**: 431 está entre `MIN_PPM..MAX_PPM` ⇒ ok.
-5. **STEP\_CAP**: fee atual = `900 ppm`. Com 5%/rodada e alvo **menor**, desce no máx. `900 * 0.05 = 45`
-   → nova fee provisória = `900 − 45 = 855 ppm`.
-6. **Piso de rebal**: custo=`700 ppm`, margem 10% ⇒ piso = `700 * 1,10 = 770 ppm`.
-7. **Resultado final**: `max(855, 770) = 855 ppm`.
-   → A fee cai de **900 → 855 ppm**, **sem** somar custo de rebal no alvo (o rebal é usado apenas como **floor**).
-
-
----
-
-## Erros comuns (e como evitar)
-
-* **`MIN_PPM` abaixo do custo de rebal constante:** pode vender rota no prejuízo → use **piso de rebal** ligado.
-* **`STEP_CAP` alto com cron frequente:** vira “montanha-russa”; reduza para 3–5%.
-* **`LOW/HIGH_OUTBOUND_*` muito agressivos:** vai “brigar” demais com a parte de custo e seed; comece com 5% e ajuste.
-* **Esquecer que `BASE_FEE_MSAT` não é aplicado:** se quiser base fee ≠ 0, é preciso estender a chamada do `bos`.
-
----
-## FAQ
-
-**Q: Dry-run altera o `last_seed`?**
-A: Não. Só salva `last_seed` (e outras métricas do STATE) quando **aplica de verdade** (sem `--dry-run`).
-
-**Q: Vejo `seed (cap)` no relatório. O que exatamente foi capado?**
-A: Pelo menos uma trava atuou (p95, salto vs anterior, ou teto absoluto). O valor mostrado já é o seed **após** o cap.
-
-**Q: O piso (floor) ainda dispara subidas quando o rebal encarece?**
-A: Sim, por design. O custo de rebal 7d protege sua margem mínima. Se esse custo sobe, o **floor** sobe. Se não quiser isso, mude `REBAL_COST_MODE` para `global` ou `blend` (mais estável), ou reduza `REBAL_FLOOR_MARGIN`.
