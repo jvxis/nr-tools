@@ -25,7 +25,9 @@ LIMITS = {
     "BOS_PUSH_MIN_ABS_PPM":    (5, 20),
     "BOS_PUSH_MIN_REL_FRAC":   (0.01, 0.06),
     "COOLDOWN_HOURS_DOWN":     (3, 18),
-    "COOLDOWN_HOURS_UP":       (1, 12)
+    "COOLDOWN_HOURS_UP":       (1, 12),
+    # Opcional (se usar blend de custo)
+    "REBAL_BLEND_LAMBDA":      (0.0, 1.0)
 }
 
 DEFAULTS = {
@@ -40,15 +42,41 @@ DEFAULTS = {
     "BOS_PUSH_MIN_ABS_PPM": 15,
     "BOS_PUSH_MIN_REL_FRAC": 0.04,
     "COOLDOWN_HOURS_DOWN": 6,
-    "COOLDOWN_HOURS_UP": 3
+    "COOLDOWN_HOURS_UP": 3,
+    # Opcional (se usar blend de custo)
+    "REBAL_BLEND_LAMBDA": 0.30
 }
 
 # Anti-ratchet (higiene)
 MIN_HOURS_BETWEEN_CHANGES = 6        # intervalo mínimo entre gravações de overrides
 REQUIRED_BAD_STREAK = 2              # nº mínimo de janelas seguidas com profit_ppm_est < 0
-DAILY_CHANGE_BUDGET = {              # orçamento diário de variação ABSOLUTA por chave
-    "OUTRATE_FLOOR_FACTOR": 0.06,    # ex.: máx 0.06 de variação (soma dos |passos|)
-    "REVFLOOR_MIN_PPM_ABS": 30       # ex.: máx 30 ppm de variação (soma dos |passos|)
+
+# Orçamento diário de variação ABSOLUTA por chave (somatório de |passos| no dia).
+DAILY_CHANGE_BUDGET = {
+    # Preço/pisos
+    "OUTRATE_FLOOR_FACTOR": 0.06,
+    "REVFLOOR_MIN_PPM_ABS": 30,
+    "REBAL_FLOOR_MARGIN":   0.03,
+
+    # Reatividade
+    "STEP_CAP":             0.03,
+
+    # Surge / drenagem
+    "SURGE_K":              0.15,
+    "SURGE_BUMP_MAX":       0.08,
+    "PERSISTENT_LOW_BUMP":  0.02,
+    "PERSISTENT_LOW_MAX":   0.06,
+
+    # Ruído de updates (BOS)
+    "BOS_PUSH_MIN_ABS_PPM": 6,
+    "BOS_PUSH_MIN_REL_FRAC":0.01,
+
+    # Histerese
+    "COOLDOWN_HOURS_UP":    3,
+    "COOLDOWN_HOURS_DOWN":  4,
+
+    # (Opcional) mistura de custo — se usar “blend”
+    "REBAL_BLEND_LAMBDA":   0.20
 }
 META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
 
@@ -176,6 +204,8 @@ def adjust(overrides, kpis, symptoms):
     BOS_PUSH_MIN_REL_FRAC = get("BOS_PUSH_MIN_REL_FRAC")
     COOLDOWN_DOWN         = get("COOLDOWN_HOURS_DOWN")
     COOLDOWN_UP           = get("COOLDOWN_HOURS_UP")
+    # opcional
+    REBAL_BLEND_LAMBDA    = get("REBAL_BLEND_LAMBDA")
 
     # 1) Se lucro muito baixo ou negativo e rebal custo alto → endurecer pisos por receita
     if prof_sat < 0 or (rebal_ppm > 250 and (out_ppm - rebal_ppm) < 80):
@@ -218,6 +248,34 @@ def adjust(overrides, kpis, symptoms):
         REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
+
+    # 5b) CB alto → subir cooldown de subida (desacelera novas altas)
+    if symptoms.get("cb_trigger", 0) >= 8:
+        COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
+        changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
+
+    # 3b) Drenagem crônica + tendência ruim → permitir escalada um pouco maior (teto)
+    if (symptoms.get("no_down_low", 0) >= 10) and (kpis["profit_ppm_est"] < 0):
+        PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+        changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
+
+    # Rollback suave se tendência melhorar (afrouxa aos poucos)
+    if kpis["profit_ppm_est"] > 0:
+        # reduz cooldown de subida
+        new_up = clamp(COOLDOWN_UP - 1, *LIMITS["COOLDOWN_HOURS_UP"])
+        if new_up != COOLDOWN_UP:
+            changed["COOLDOWN_HOURS_UP"] = new_up
+        # reduz teto de persistência
+        new_plmax = clamp(PERSISTENT_LOW_MAX - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+        if new_plmax != PERSISTENT_LOW_MAX:
+            changed["PERSISTENT_LOW_MAX"] = new_plmax
+
+    # (Opcional) estratégia: se custo global >> preço, você pode aproximar o blend do global
+    # Ex.: se profit_ppm_est muito negativo por longo período, mover lambda +0.05 (até 1.0)
+    # (Deixe comentado se não quiser ativar)
+    # if kpis["profit_ppm_est"] < -150:
+    #     REBAL_BLEND_LAMBDA = clamp(REBAL_BLEND_LAMBDA + 0.05, *LIMITS["REBAL_BLEND_LAMBDA"])
+    #     changed["REBAL_BLEND_LAMBDA"] = REBAL_BLEND_LAMBDA
 
     # retorna overrides novos (somente o que mudou)
     return changed
@@ -271,7 +329,7 @@ def enforce_daily_budget(current_overrides, proposed_new_values, meta):
             old_abs = float(old_abs)
             new_abs = float(new_abs)
         except Exception:
-            # para chaves não-numéricas (se algum dia houver), apenas permite
+            # para chaves não-numéricas, apenas permite
             allowed[k] = new_abs
             continue
 
@@ -291,7 +349,6 @@ def enforce_daily_budget(current_overrides, proposed_new_values, meta):
 
         # Se não há espaço, pula
         if room <= 0:
-            # nada a aplicar hoje
             continue
 
         # Se o passo excede o espaço, corta
@@ -354,7 +411,6 @@ def main(dry_run=False, verbose=True):
             print("Symptoms:", symptoms)
             print("Changes:", {})
             print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
-
         save_meta(meta)
         return
 
