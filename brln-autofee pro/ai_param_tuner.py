@@ -8,7 +8,7 @@ from collections import defaultdict
 DB_PATH     = '/home/admin/lndg/data/db.sqlite3'
 CACHE_PATH  = "/home/admin/.cache/auto_fee_amboss.json"
 STATE_PATH  = "/home/admin/.cache/auto_fee_state.json"
-OVERRIDES   = "autofee_overrides.json"
+OVERRIDES   = "/home/admin/nr-tools/brln-autofee pro/autofee_overrides.json"
 
 LOOKBACK_DAYS = 7
 
@@ -42,6 +42,16 @@ DEFAULTS = {
     "COOLDOWN_HOURS_DOWN": 6,
     "COOLDOWN_HOURS_UP": 3
 }
+
+# Anti-ratchet (higiene)
+MIN_HOURS_BETWEEN_CHANGES = 6        # intervalo mínimo entre gravações de overrides
+REQUIRED_BAD_STREAK = 2              # nº mínimo de janelas seguidas com profit_ppm_est < 0
+DAILY_CHANGE_BUDGET = {              # orçamento diário de variação ABSOLUTA por chave
+    "OUTRATE_FLOOR_FACTOR": 0.06,    # ex.: máx 0.06 de variação (soma dos |passos|)
+    "REVFLOOR_MIN_PPM_ABS": 30       # ex.: máx 30 ppm de variação (soma dos |passos|)
+}
+META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
+
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -142,6 +152,7 @@ def read_symptoms_from_logs():
 def adjust(overrides, kpis, symptoms):
     """
     Regras conservadoras de ajuste.
+    Retorna NOVOS VALORES (absolutos) apenas para chaves a alterar.
     """
     changed = {}
 
@@ -211,29 +222,161 @@ def adjust(overrides, kpis, symptoms):
     # retorna overrides novos (somente o que mudou)
     return changed
 
+# =========================
+# Anti-ratchet helpers
+# =========================
+def load_meta():
+    try:
+        if os.path.exists(META_PATH):
+            with open(META_PATH, "r") as f:
+                return json.load(f)
+    except:
+        pass
+    # estrutura inicial
+    return {"last_change_ts": 0, "bad_streak": 0, "daily_budget": {}, "last_day": None}
+
+def save_meta(meta):
+    os.makedirs(os.path.dirname(META_PATH), exist_ok=True)
+    with open(META_PATH, "w") as f:
+        json.dump(meta, f, indent=2, sort_keys=True)
+
+def can_change_now(meta):
+    now = int(time.time())
+    hours = (now - int(meta.get("last_change_ts", 0))) / 3600.0
+    return hours >= MIN_HOURS_BETWEEN_CHANGES
+
+def update_bad_streak(meta, profit_ppm_est):
+    # tendencia ruim quando profit_ppm_est < 0
+    if profit_ppm_est < 0:
+        meta["bad_streak"] = int(meta.get("bad_streak", 0)) + 1
+    else:
+        meta["bad_streak"] = 0
+
+def enforce_daily_budget(current_overrides, proposed_new_values, meta):
+    """
+    Limita variação ABSOLUTA aplicada por dia (soma de |passos|).
+    Recebe valores absolutos propostos e devolve valores absolutos aprovados (pós-limite).
+    """
+    day = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    if meta.get("last_day") != day:
+        meta["daily_budget"] = {}
+        meta["last_day"] = day
+
+    allowed = {}
+    for k, new_abs in proposed_new_values.items():
+        old_abs = current_overrides.get(k, DEFAULTS.get(k))
+        if old_abs is None:
+            old_abs = DEFAULTS.get(k)
+        try:
+            old_abs = float(old_abs)
+            new_abs = float(new_abs)
+        except Exception:
+            # para chaves não-numéricas (se algum dia houver), apenas permite
+            allowed[k] = new_abs
+            continue
+
+        diff = new_abs - old_abs
+        if diff == 0:
+            continue
+
+        limit = DAILY_CHANGE_BUDGET.get(k)
+        if not limit:
+            # sem orçamento → permite total, mas ainda respeita LIMITS
+            allowed[k] = new_abs
+            continue
+
+        used = float(meta["daily_budget"].get(k, 0.0))
+        room = max(0.0, limit - used)
+        step = diff
+
+        # Se não há espaço, pula
+        if room <= 0:
+            # nada a aplicar hoje
+            continue
+
+        # Se o passo excede o espaço, corta
+        if abs(step) > room:
+            step = math.copysign(room, step)
+
+        final_val = old_abs + step
+        allowed[k] = final_val
+        meta["daily_budget"][k] = used + abs(step)
+
+    return allowed
+
+def apply_limits(proposed):
+    """Aplica LIMITS (clamp) nos valores numéricos propostos."""
+    out = {}
+    for k, v in proposed.items():
+        if k in LIMITS:
+            lo, hi = LIMITS[k]
+            out[k] = clamp(float(v), lo, hi) if isinstance(v, (int, float)) else v
+        else:
+            out[k] = v
+    return out
+
+# =========================
+# MAIN
+# =========================
 def main(dry_run=False, verbose=True):
     kpis = get_7d_kpis()
     symptoms = read_symptoms_from_logs()
 
-    # carrega overrides atuais (ou defaults)
+    # carrega overrides atuais (ou defaults como base)
     cur = load_json(OVERRIDES, {}) or {}
     for k, v in DEFAULTS.items():
         cur.setdefault(k, v)
 
-    delta = adjust(cur, kpis, symptoms)
+    # anti-ratchet meta
+    meta = load_meta()
+    update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
+
+    # cálculo de variações desejadas (absolutas)
+    proposed = {}
+    if meta["bad_streak"] >= REQUIRED_BAD_STREAK:
+        proposed = adjust(cur, kpis, symptoms)
+        # aplica limites de range
+        proposed = apply_limits(proposed)
+        # aplica orçamento diário
+        proposed = enforce_daily_budget(cur, proposed, meta)
+        # se não passou no debounce temporal, cancela aplicação (mas mostra no log)
+        if proposed and not can_change_now(meta):
+            if verbose:
+                print("KPIs 7d:", kpis)
+                print("Symptoms:", symptoms)
+                print("Changes (bloqueado por cooldown temporal):", proposed)
+                print(f"[info] aguardando {MIN_HOURS_BETWEEN_CHANGES}h entre alterações.")
+            save_meta(meta)
+            return
+    else:
+        if verbose:
+            print("KPIs 7d:", kpis)
+            print("Symptoms:", symptoms)
+            print("Changes:", {})
+            print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
+
+        save_meta(meta)
+        return
 
     if verbose:
         print("KPIs 7d:", kpis)
         print("Symptoms:", symptoms)
-        print("Changes:", delta)
+        print("Changes:", proposed)
 
-    if not dry_run and delta:
-        cur.update(delta)
+    if not dry_run and proposed:
+        # aplica (merge) e salva overrides
+        cur.update(proposed)
         save_json(OVERRIDES, cur)
+        meta["last_change_ts"] = int(time.time())
+        save_meta(meta)
         if verbose:
             print(f"[ok] overrides atualizados em {OVERRIDES}")
+    elif dry_run and proposed and verbose:
+        print("[dry-run] alterações propostas (não salvas).")
+        save_meta(meta)  # ainda assim atualiza meta (streak/orçamento do dia)
     elif verbose:
         print("[info] nada a alterar.")
+        save_meta(meta)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
