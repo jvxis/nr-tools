@@ -21,7 +21,7 @@ Os ajustes são gravados em um arquivo JSON separado:
 /home/admin/<seu_dir>/autofee_overrides.json
 ```
 
-Esse arquivo é carregado automaticamente pelo `brln-autofee-2.py` no início da execução.
+Esse arquivo é carregado automaticamente pelo `brln-autofee-pro.py` no início da execução.
 Se o arquivo **não existir ou estiver vazio**, nada acontece — o script usa os valores padrão, sem erro.
 
 ---
@@ -66,7 +66,7 @@ No próximo ciclo do AutoFee, esses overrides serão carregados e usados automat
 
 ```cron
 50 * * * * /usr/bin/python3 /home/admin/<seu_dir>/ai_param_tuner.py >> /home/admin/<seu_dir>/ai_param_tuner.log 2>&1
-0  * * * * /usr/bin/python3 /home/admin/<seu_dir>/brln-autofee-2.py >> /home/admin/<seu_dir>/autofee.log 2>&1
+0  * * * * /usr/bin/python3 /home/admin/<seu_dir>/brln-autofee-pro.py >> /home/admin/<seu_dir>/autofee.log 2>&1
 ```
 
 * 👀 **Modo consultivo:** se quiser apenas recomendações, rode **somente em `--dry-run`**. Assim você visualiza os ajustes sem aplicá-los.
