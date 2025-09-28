@@ -1,7 +1,3 @@
-Claro ⚡ Segue um manual em **Markdown** dedicado apenas ao **Agente de Ajuste Automático de Parâmetros** (`ai_param_tuner.py`).
-
----
-
 # 📘 Manual — Agente de Ajuste Automático (AutoFee IA)
 
 Este módulo complementa o **AutoFee LND** adicionando uma camada de **IA simples** para otimizar parâmetros globais de acordo com o desempenho recente do node.
