@@ -221,6 +221,34 @@ DRYRUN_SAVE_CLASS = True
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
+# === OVERRIDES DINÂMICOS (IA) ===
+# Lê um JSON opcional e sobrescreve apenas chaves presentes.
+# Caminho padrão (pode mudar): 
+OVERRIDES_PATH = os.getenv("AUTOFEE_OVERRIDES", "autofee_overrides.json")
+
+def _apply_overrides(ns: dict, ov: dict, prefix=""):
+    """Aplica ov[k] -> ns[k] apenas se ns tiver k. Evita criar variáveis novas por engano."""
+    for k, v in ov.items():
+        if isinstance(v, dict) and k in ns and isinstance(ns[k], dict):
+            _apply_overrides(ns[k], v, prefix + k + ".")
+        elif k in ns:
+            ns[k] = v
+
+def load_overrides():
+    try:
+        if os.path.exists(OVERRIDES_PATH):
+            with open(OVERRIDES_PATH, "r") as f:
+                ov = json.load(f)
+            # monta um "namespace" das suas globals ajustáveis
+            globals_ns = globals()
+            _apply_overrides(globals_ns, ov)
+            return True
+    except Exception as e:
+        print(f"[overrides] aviso: não foi possível carregar {OVERRIDES_PATH}: {e}", file=sys.stderr)
+    return False
+
+# carregue overrides imediatamente após a definição das constantes:
+_ = load_overrides()
 
 # ========== HELPERS ==========
 def now_utc():
