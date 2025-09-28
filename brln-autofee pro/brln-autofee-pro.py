@@ -67,7 +67,7 @@ CB_GRACE_DAYS  = 7      # janela de observação menor
 
 # --- Proteção de custo de rebal (PISO) ---
 REBAL_FLOOR_ENABLE = True      # habilita piso de segurança
-REBAL_FLOOR_MARGIN = 0.15      # 15% acima do custo médio de rebal 7d
+REBAL_FLOOR_MARGIN = 0.10      # 10% acima do custo médio de rebal 7d
 
 # --- Composição do custo no ALVO ---
 #   "global"      = usa só o custo global 7d
@@ -80,7 +80,7 @@ REBAL_BLEND_LAMBDA = 0.30      # se "blend": 30% global, 70% canal
 SEED_GUARD_ENABLE      = True
 SEED_GUARD_MAX_JUMP    = 0.50   # máx +50% vs seed anterior gravado no STATE
 SEED_GUARD_P95_CAP     = True   # cap no P95 da série 7d do Amboss
-SEED_GUARD_ABS_MAX_PPM = 2000   # teto absoluto opcional (0/None para desativar)
+SEED_GUARD_ABS_MAX_PPM = 1600   # teto absoluto opcional (0/None para desativar)
 
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True
@@ -99,20 +99,20 @@ STEP_CAP_IDLE_DOWN = 0.10 # fwd_count==0 & out_ratio>0.60 (queda)
 STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
 
 # Floor por canal mais robusto
-REBAL_PERCHAN_MIN_VALUE_SAT = 200_000  # volume mínimo 7d p/ usar custo por canal
-REBAL_FLOOR_SEED_CAP_FACTOR = 1.6      # teto do floor relativo ao seed
+REBAL_PERCHAN_MIN_VALUE_SAT = 400_000  # 200k -> 400k: precisa sinal real para usar custo por canal
+REBAL_FLOOR_SEED_CAP_FACTOR = 1.4      # teto do floor relativo ao seed
 
 # Outrate floor dinâmico
 OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
-OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 3     # MOD: 5 → 3 (liga mais cedo)
-OUTRATE_FLOOR_FACTOR_LOW          = 0.95  # MOD: 0.90 → 0.95 (piso um pouco maior)
+OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 5     # liga mais cedo
+OUTRATE_FLOOR_FACTOR_LOW          = 0.90  # piso um pouco maior
 
 # Discovery mode: sem forwards e liquidez sobrando -> queda mais rápida e sem outrate floor
 DISCOVERY_ENABLE   = True
 DISCOVERY_OUT_MIN  = 0.30  # >30% outbound = sobra
 DISCOVERY_FWDS_MAX = 0
 # MOD: hard-drop extra para canais realmente ociosos
-DISCOVERY_HARDDROP_DAYS_NO_BASE = 14   # se nunca gerou baseline em 14d, acelerar quedas
+DISCOVERY_HARDDROP_DAYS_NO_BASE = 10   # se nunca gerou baseline em 10d, acelerar quedas
 DISCOVERY_HARDDROP_CAP_FRAC     = 0.20 # step cap para QUEDAS
 DISCOVERY_HARDDROP_COLCHAO      = 10   # colchão efetivo reduzido
 
@@ -122,14 +122,14 @@ SEED_EMA_ALPHA = 0.20  # 0 desliga
 # ========== LUCRO/DEMANDA ==========
 # 1) Surge pricing quando muito drenado
 SURGE_ENABLE = True
-SURGE_LOW_OUT_THRESH = 0.10   # MOD: 0.08 → 0.10 (entra mais cedo)
+SURGE_LOW_OUT_THRESH = 0.10
 SURGE_K = 0.50
 SURGE_BUMP_MAX = 0.20
 
 # 2) Bump em peers TOP de receita
 TOP_REVENUE_SURGE_ENABLE = True
-TOP_OUTFEE_SHARE = 0.20       # MOD: 0.30 → 0.20 (mais inclusivo)
-TOP_REVENUE_SURGE_BUMP = 0.12 # MOD: 0.10 → 0.12 (ligeiro aumento)
+TOP_OUTFEE_SHARE = 0.20
+TOP_REVENUE_SURGE_BUMP = 0.12
 
 # MOD: Extreme drain mode (acelera SUBIDAS quando drenado crônico com demanda)
 EXTREME_DRAIN_ENABLE       = True
@@ -140,17 +140,17 @@ EXTREME_DRAIN_MIN_STEP_PPM = 15     # passo mínimo p/ SUBIR
 
 # MOD: Revenue floor (piso por tráfego) p/ super-rotas muito ativas
 REVFLOOR_ENABLE            = True
-REVFLOOR_BASELINE_THRESH   = 150    # baseline_fwd7d mínimo
-REVFLOOR_MIN_PPM_ABS       = 140    # piso absoluto (consideramos seed*0.40 também)
+REVFLOOR_BASELINE_THRESH   = 150
+REVFLOOR_MIN_PPM_ABS       = 140
 
 # 3) Margem 7d negativa
 NEG_MARGIN_SURGE_ENABLE = True
-NEG_MARGIN_SURGE_BUMP   = 0.08
+NEG_MARGIN_SURGE_BUMP   = 0.05
 NEG_MARGIN_MIN_FWDS     = 5
 
 # 4) Evitar “micro-updates” no BOS (MAIS DURO p/ 1h)
-BOS_PUSH_MIN_ABS_PPM   = 10     # ↑ (era 3)
-BOS_PUSH_MIN_REL_FRAC  = 0.03   # ↑ (era 0.01)
+BOS_PUSH_MIN_ABS_PPM   = 15     # ↑
+BOS_PUSH_MIN_REL_FRAC  = 0.04   # ↑
 
 # ========== OFFLINE SKIP ==========
 OFFLINE_SKIP_ENABLE = True
@@ -161,65 +161,61 @@ SURGE_RESPECT_STEPCAP = True
 
 # ========== HISTERÉSE (COOLDOWN) ==========
 APPLY_COOLDOWN_ENABLE = True
-COOLDOWN_HOURS_UP   = 3    # tempo mínimo entre SUBIDAS
-COOLDOWN_HOURS_DOWN = 6    # MOD: 4 → 6 (quedas mais conservadoras em rotas boas)
-COOLDOWN_FWDS_MIN   = 2    # exige pelo menos X forwards desde a última mudança
-# MOD: cooldown obrigatório para QUEDA quando rota é lucrativa
+COOLDOWN_HOURS_UP   = 3
+COOLDOWN_HOURS_DOWN = 6
+COOLDOWN_FWDS_MIN   = 2
 COOLDOWN_PROFIT_DOWN_ENABLE = True
-COOLDOWN_PROFIT_MARGIN_MIN  = 0     # exige margin_ppm_7d > 0
-COOLDOWN_PROFIT_FWDS_MIN    = 10    # e fwd_count ≥ 10
+COOLDOWN_PROFIT_MARGIN_MIN  = 0
+COOLDOWN_PROFIT_FWDS_MIN    = 10
 
 # ========== SHARDING ==========
 SHARDING_ENABLE = False
-SHARD_MOD = 3  # 3 shards => cada canal muda a cada ~3 horas
+SHARD_MOD = 3
 
 # ========== NEW INBOUND NORMALIZE ==========
 NEW_INBOUND_NORMALIZE_ENABLE   = True
-NEW_INBOUND_GRACE_HOURS        = 48     # janela para "amaciar" canais novos do peer
-NEW_INBOUND_OUT_MAX            = 0.05   # outbound ~0 (inbound puro)
-NEW_INBOUND_REQUIRE_NO_FWDS    = True   # só ativa sem forwards
-NEW_INBOUND_MIN_DIFF_FRAC      = 0.25   # exige taxa atual ≥ seed*(1+25%)
-NEW_INBOUND_MIN_DIFF_PPM       = 50     # e pelo menos +50ppm acima do seed
-NEW_INBOUND_DOWN_STEPCAP_FRAC  = 0.15   # step cap maior só para reduzir
+NEW_INBOUND_GRACE_HOURS        = 48
+NEW_INBOUND_OUT_MAX            = 0.05
+NEW_INBOUND_REQUIRE_NO_FWDS    = True
+NEW_INBOUND_MIN_DIFF_FRAC      = 0.25
+NEW_INBOUND_MIN_DIFF_PPM       = 50
+NEW_INBOUND_DOWN_STEPCAP_FRAC  = 0.15
 NEW_INBOUND_TAG                = "🌱new-inbound"
 
 # ========== DEBUG ==========
-DEBUG_TAGS = True  # mostra seedcap:none e t/r/f no log
+DEBUG_TAGS = True
 
 # ========== EXCL-Dry VERBOSE / TAG-ONLY ==========
-# True  = comportamento atual (linha detalhada DRY com métricas)
-# False = apenas uma linha compacta com a tag `🚷excl-dry` (sem métricas)
 EXCL_DRY_VERBOSE = True
 
 # ========== CLASSIFICAÇÃO DINÂMICA (sink/source/router) ==========
-# MOD: parâmetros de classificação automática e políticas por classe
-CLASSIFY_ENABLE                = True   # MOD: chave global
-CLASS_BIAS_EMA_ALPHA           = 0.45   # suavização do viés in/out (reage mais rápido)
+CLASSIFY_ENABLE                = True
+CLASS_BIAS_EMA_ALPHA           = 0.45
 
-# >>> AJUSTES (mais inclusivos p/ sink/source; menos "tudo router")
-CLASS_MIN_FWDS                 = 6
-CLASS_MIN_VALUE_SAT            = 60_000
+# >>> AJUSTES
+CLASS_MIN_FWDS                 = 4
+CLASS_MIN_VALUE_SAT            = 40_000
 SINK_BIAS_MIN                  = 0.50
 SINK_OUTRATIO_MAX              = 0.15
 SOURCE_BIAS_MIN                = 0.35
 SOURCE_OUTRATIO_MIN            = 0.58
-ROUTER_BIAS_MAX                = 0.25
+ROUTER_BIAS_MAX                = 0.30
 CLASS_CONF_HYSTERESIS          = 0.10
 
-# Políticas por classe (conservadoras, só afinam o que já existe)
-SINK_EXTRA_FLOOR_MARGIN        = 0.05   # piso adicional sobre o piso calculado
-SINK_MIN_OVER_SEED_FRAC        = 0.90   # não descer abaixo de 90% do seed em sinks
-SOURCE_SEED_TARGET_FRAC        = 0.60   # alvo tende a 60% do seed em sources (quando for queda)
-SOURCE_DISABLE_OUTRATE_FLOOR   = True   # ignora outrate floor em sources (ajuda a escoar)
-ROUTER_STEP_CAP_BONUS          = 0.02   # +2pp em step cap para reagir um pouco mais
+# Políticas por classe
+SINK_EXTRA_FLOOR_MARGIN        = 0.05
+SINK_MIN_OVER_SEED_FRAC        = 0.90
+SOURCE_SEED_TARGET_FRAC        = 0.60
+SOURCE_DISABLE_OUTRATE_FLOOR   = True
+ROUTER_STEP_CAP_BONUS          = 0.02
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
 TAG_SOURCE   = "🏷️source"
 TAG_ROUTER   = "🏷️router"
-TAG_UNKNOWN  = "🏷️unknown"   # explicitar quando não classificou
+TAG_UNKNOWN  = "🏷️unknown"
 
-# Persistir classe em dry-run? (somente campos de classe, sem tocar fee/ts)
+# Persistir classe em dry-run?
 DRYRUN_SAVE_CLASS = True
 
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
@@ -584,7 +580,7 @@ def main(dry_run=False):
     out_amt_sat = defaultdict(int)
     out_count   = defaultdict(int)
 
-    # MOD: acumular ENTRADA por canal para classificar sources/routers
+    # ENTRADA p/ classificar sources/routers
     in_amt_sat_by_cid  = defaultdict(int)
     in_count_by_cid    = defaultdict(int)
 
@@ -620,7 +616,7 @@ def main(dry_run=False):
     peer_count = max(1, len(incoming_msat_by_pub))
     avg_share = 1.0 / peer_count if peer_count > 0 else 0.0
 
-    # Receita total de fees de saída (p/ “top revenue surge”)
+    # Receita total de fees de saída
     total_out_fee_sat = sum(out_fee_sat.values())
 
     # ---- Custo de rebal (7d) GLOBAL e POR CANAL ----
@@ -671,6 +667,7 @@ def main(dry_run=False):
     offline_skips = 0
     shard_skips = 0
     excl_dry_up = excl_dry_down = excl_dry_kept = 0
+    max_hits = 0  # << telemetria: canais que ficaram no MAX_PPM
 
     chan_status_cache = cache.get(OFFLINE_STATUS_CACHE_KEY, {})
 
@@ -857,19 +854,14 @@ def main(dry_run=False):
                 cand_label = "router"
                 cand_conf  = min(1.0, (ROUTER_BIAS_MAX - abs(bias_ema)) / ROUTER_BIAS_MAX + 0.3)
 
-        # --- boosts conservadores p/ favorecer 'source' quando fizer sentido ---
-
-        # 1) Nenhum rebal de saída para este canal nos 7d → o canal encheu “sozinho”
+        # boosts conservadores pró-source
         no_rebal_to_this_chan = (perchan_value_sat.get(cid, 0) == 0)
         if cand_label in ("unknown", "source") and no_rebal_to_this_chan and bias_ema <= -(SOURCE_BIAS_MIN - 0.05):
             cand_label = "source"
             cand_conf  = min(1.0, cand_conf + 0.20)
 
-        # 2) Peer com incoming acima da média (boost por share; p65 só para diagnóstico)
         if pubkey and total_incoming_msat > 0:
             share = incoming_msat_by_pub.get(pubkey, 0) / total_incoming_msat
-
-            # (opcional) tenta p65 a partir do cache da série, só para fins de debug/telemetria local
             in_p65 = cache.get(f"incoming_p65_7d:{pubkey}")
             if in_p65 is None:
                 series_entry = cache.get(f"incoming_series_7d:{pubkey}")
@@ -878,10 +870,7 @@ def main(dry_run=False):
                     pos = 0.65 * (len(vs) - 1)
                     lo, hi = int(pos), int(math.ceil(pos))
                     in_p65 = vs[lo] if lo == hi else vs[lo]*(hi - pos) + vs[hi]*(pos - lo)
-                    # (opcional) cachear
                     cache[f"incoming_p65_7d:{pubkey}"] = in_p65
-
-            # boost baseado em share relativo (Amboss não é obrigatório para o boost)
             if share >= (avg_share * 1.8) and bias_ema <= - (SOURCE_BIAS_MIN - 0.03):
                 cand_label = "source"
                 cand_conf  = min(1.0, cand_conf + 0.10)
@@ -918,8 +907,13 @@ def main(dry_run=False):
             if streak >= PERSISTENT_LOW_STREAK_MIN:
                 bump_acc = (streak - PERSISTENT_LOW_STREAK_MIN + 1) * PERSISTENT_LOW_BUMP
                 bump_acc = min(PERSISTENT_LOW_MAX, max(0.0, bump_acc))
-                bump_mult = 1.0 + bump_acc
 
+                # ⬇️ NOVO: não inflar em stale-drain (sem base)
+                baseline_val_persist = state.get(cid, {}).get("baseline_fwd7d", 0) or 0
+                if (streak >= EXTREME_DRAIN_STREAK) and (baseline_val_persist <= 2):
+                    bump_acc = 0.0
+
+                bump_mult = 1.0 + bump_acc
                 bump_mode = "seed"
                 if PERSISTENT_LOW_OVER_CURRENT_ENABLE and target <= local_ppm:
                     target = max(
@@ -1071,6 +1065,10 @@ def main(dry_run=False):
         # Em SOURCE, desabilitar outrate floor
         if class_label == "source" and SOURCE_DISABLE_OUTRATE_FLOOR:
             outrate_floor_active = False
+        
+        # NEW: se não houve forwards na janela, não aplica outrate floor
+        if fwd_count == 0:
+            outrate_floor_active = False
 
         if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
@@ -1084,6 +1082,10 @@ def main(dry_run=False):
             extra = clamp_ppm(int(math.ceil((base_cost_for_margin or 0) * SINK_EXTRA_FLOOR_MARGIN)))
             floor_ppm = max(floor_ppm, extra)
             floor_ppm = max(floor_ppm, clamp_ppm(int(seed_used * SINK_MIN_OVER_SEED_FRAC)))
+
+        # ⬇️ NOVO: em discovery, desligar piso de rebal (deixa só o MIN_PPM)
+        if discovery_hit:
+            floor_ppm = max(MIN_PPM, min(floor_ppm, MIN_PPM))
 
         # Cálculo final com piso
         final_ppm = max(raw_step_ppm, floor_ppm)
@@ -1100,8 +1102,13 @@ def main(dry_run=False):
             pref = clamp_ppm(int(seed_used * SOURCE_SEED_TARGET_FRAC))
             final_ppm = min(final_ppm, pref)
 
-        # Clamp final absoluto (higiene)
-        final_ppm = clamp_ppm(final_ppm)
+        # Clamp final com teto local por canal (barreira suave)
+        local_max = min(MAX_PPM, max(800, int(seed_used * 1.8)))
+        final_ppm = max(MIN_PPM, min(local_max, int(round(final_ppm))))
+
+        # Telemetria: bateu no MAX_PPM global?
+        if final_ppm == MAX_PPM:
+            max_hits += 1
 
         # Diagnóstico
         diag_tags = []
@@ -1117,8 +1124,8 @@ def main(dry_run=False):
         if final_ppm == local_ppm and target != local_ppm and floor_ppm <= local_ppm:
             diag_tags.append("⛔stepcap-lock")
 
-        if discovery_hit:
-            diag_tags.append("🧪discovery")
+        # marcações de contexto
+        discovery_hit and diag_tags.append("🧪discovery")
         for t in (surge_tag, top_tag, negm_tag):
             if t: diag_tags.append(t)
         if new_inbound:
@@ -1132,9 +1139,15 @@ def main(dry_run=False):
 
         if DEBUG_TAGS:
             diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
-        diag_tags += status_tags
+        status_tags = []  # já foi montado acima; só para clareza de ordem
+        all_tags = class_tags + seed_tags + diag_tags
 
-        all_tags = class_tags + (pl_tags + seed_tags + diag_tags)
+        # ====== MÍNIMO REAL: sanear local < MIN_PPM ======
+        # Fazemos antes do gate de microupdate/cooldown.
+        if local_ppm < MIN_PPM:
+            # Vamos forçar aplicação do mínimo, sem segurar por cooldown/microupdate.
+            final_ppm = max(final_ppm, MIN_PPM)
+            all_tags.append("🩹min-fix")
 
         new_ppm = final_ppm
 
@@ -1153,6 +1166,10 @@ def main(dry_run=False):
                 will_push = False
                 all_tags.append("🧘hold-small")
 
+        # se estamos corrigindo MIN_PPM, força push
+        if local_ppm < MIN_PPM and new_ppm >= MIN_PPM:
+            will_push = True
+
         # === COOLDOWN / HISTERÉSE ===
         st_prev  = state.get(cid, {})
         last_ts  = st_prev.get("last_ts", 0)
@@ -1161,7 +1178,10 @@ def main(dry_run=False):
         fwds_since = max(0, fwd_count - fwds_at_change)
 
         if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
-            if not (new_inbound and new_ppm < local_ppm):
+            # em discovery e QUEDA, não aplicar cooldown
+            if discovery_hit and new_ppm < local_ppm:
+                pass
+            elif not (new_inbound and new_ppm < local_ppm):
                 need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
                 if hours_since < need and fwds_since < COOLDOWN_FWDS_MIN:
                     will_push = False
@@ -1212,6 +1232,10 @@ def main(dry_run=False):
                     if is_excluded:
                         if new_ppm > local_ppm: excl_dry_up += 1
                         else: excl_dry_down += 1
+                    else:
+                        # >>> NOVO: contabiliza no resumo também em dry-run
+                        if new_ppm > local_ppm: changed_up += 1
+                        else: changed_down += 1
             else:
                 try:
                     if pubkey:
@@ -1295,7 +1319,7 @@ def main(dry_run=False):
                     kept += 1
 
     # resumo na 2ª linha do relatório
-    summary = f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips}"
+    summary = f"📊 up {changed_up} | down {changed_down} | flat {kept} | low_out {low_out_count} | offline {offline_skips} | max_hits {max_hits}"
     if SHARDING_ENABLE:
         summary += f" | shard_skips {shard_skips}"
     if (excl_dry_up + excl_dry_down + excl_dry_kept) > 0:
@@ -1337,3 +1361,4 @@ if __name__ == "__main__":
         EXCL_DRY_VERBOSE = False
 
     main(dry_run=args.dry_run)
+
