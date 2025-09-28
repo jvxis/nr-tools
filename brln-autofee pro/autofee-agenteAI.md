@@ -52,7 +52,7 @@ Changes: {'OUTRATE_FLOOR_FACTOR': 1.03, 'REVFLOOR_MIN_PPM_ABS': 150}
 Grava os ajustes sugeridos no arquivo `autofee_overrides.json`:
 
 ```bash
-python3 /home/admin/lndtools/ai_param_tuner.py
+python3 /home/admin/<seu dir>/ai_param_tuner.py
 ```
 
 No próximo ciclo do AutoFee, esses overrides serão carregados e usados automaticamente.
