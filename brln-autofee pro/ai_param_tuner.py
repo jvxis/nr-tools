@@ -3,6 +3,8 @@
 
 import os, json, sqlite3, datetime, time, math, argparse
 from collections import defaultdict
+from zoneinfo import ZoneInfo
+LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 
 # === paths (ajuste se necessário) ===
 DB_PATH     = '/home/admin/lndg/data/db.sqlite3'
@@ -315,7 +317,7 @@ def enforce_daily_budget(current_overrides, proposed_new_values, meta):
     Limita variação ABSOLUTA aplicada por dia (soma de |passos|).
     Recebe valores absolutos propostos e devolve valores absolutos aprovados (pós-limite).
     """
-    day = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+    day = datetime.datetime.now(LOCAL_TZ).date().isoformat()
     if meta.get("last_day") != day:
         meta["daily_budget"] = {}
         meta["last_day"] = day
@@ -396,6 +398,9 @@ def main(dry_run=False, verbose=True):
         proposed = apply_limits(proposed)
         # aplica orçamento diário
         proposed = enforce_daily_budget(cur, proposed, meta)
+        if verbose and proposed:
+            used = load_json(META_PATH, {}).get("daily_budget", {})
+            print("[budget] uso hoje:", used)
         # se não passou no debounce temporal, cancela aplicação (mas mostra no log)
         if proposed and not can_change_now(meta):
             if verbose:
@@ -439,3 +444,4 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true", help="Apenas mostra os ajustes; não grava o JSON.")
     args = ap.parse_args()
     main(dry_run=args.dry_run, verbose=True)
+

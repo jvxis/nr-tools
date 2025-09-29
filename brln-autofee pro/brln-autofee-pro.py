@@ -30,7 +30,7 @@ STATE_PATH    = "/home/admin/.cache/auto_fee_state.json"
 # --- limites base ---
 BASE_FEE_MSAT = 0
 MIN_PPM = 100          # protege receita mínima
-MAX_PPM = 1500         # teto padrão
+MAX_PPM = 2000         # teto padrão
 # MOD: clamp final explícito será aplicado no final do cálculo (higiene)
 
 # --- “velocidade” de mudança por execução (padrão) ---
@@ -85,7 +85,14 @@ SEED_GUARD_ABS_MAX_PPM = 1600   # teto absoluto opcional (0/None para desativar)
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True
 OUTRATE_FLOOR_FACTOR      = 1
-OUTRATE_FLOOR_MIN_FWDS    = 5
+OUTRATE_FLOOR_MIN_FWDS    = 1
+
+# >>> PATCH: OUTRATE PEG (grudar no preço observado) e ajustes de floor
+OUTRATE_PEG_ENABLE         = True     # ativa proteção para não cair abaixo do preço que já vendeu
+OUTRATE_PEG_MIN_FWDS       = 1        # bastou 1 forward na janela para reconhecer 'preço observado'
+OUTRATE_PEG_HEADROOM       = 0.03     # folga de +3% acima do outrate observado
+OUTRATE_PEG_GRACE_HOURS    = 72       # só autoriza cair abaixo do outrate após 72h desde a última mudança
+OUTRATE_PEG_SEED_MULT      = 1.20     # se outrate >= 1.2x seed, trata como demanda real (fura teto seed*1.8)
 
 # =========================
 # TUNING EXTRA
@@ -104,7 +111,7 @@ REBAL_FLOOR_SEED_CAP_FACTOR = 1.4      # teto do floor relativo ao seed
 
 # Outrate floor dinâmico
 OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
-OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 5     # liga mais cedo
+OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 1     # liga mais cedo
 OUTRATE_FLOOR_FACTOR_LOW          = 0.90  # piso um pouco maior
 
 # Discovery mode: sem forwards e liquidez sobrando -> queda mais rápida e sem outrate floor
@@ -223,8 +230,8 @@ EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
 # === OVERRIDES DINÂMICOS (IA) ===
 # Lê um JSON opcional e sobrescreve apenas chaves presentes.
-# Caminho padrão (pode mudar): 
-OVERRIDES_PATH = os.getenv("AUTOFEE_OVERRIDES", "autofee_overrides.json")
+# Caminho padrão (pode mudar): /home/admin/lndtools/autofee_overrides.json
+OVERRIDES_PATH = os.getenv("AUTOFEE_OVERRIDES", "/home/admin/nr-tools/brln-autofee pro/autofee_overrides.json")
 
 def _apply_overrides(ns: dict, ov: dict, prefix=""):
     """Aplica ov[k] -> ns[k] apenas se ns tiver k. Evita criar variáveis novas por engano."""
@@ -1104,7 +1111,12 @@ def main(dry_run=False):
 
         # Cap do floor pelo seed (evita piso "absurdo")
         floor_ppm = min(floor_ppm, clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR))))
-
+        # >>> PATCH: OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
+        outrate_peg_active = False
+        if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
+            outrate_peg_active = True
+            outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+            floor_ppm = max(floor_ppm, outrate_peg_ppm)
         # SINK — piso adicional e não descer abaixo de fração do seed
         if class_label == "sink":
             extra = clamp_ppm(int(math.ceil((base_cost_for_margin or 0) * SINK_EXTRA_FLOOR_MARGIN)))
@@ -1131,7 +1143,19 @@ def main(dry_run=False):
             final_ppm = min(final_ppm, pref)
 
         # Clamp final com teto local por canal (barreira suave)
+        # >>> PATCH: TETO condicional — preserva demanda observada
         local_max = min(MAX_PPM, max(800, int(seed_used * 1.8)))
+
+        # exceções: se há demanda, não estrangular pelo teto ancorado no seed
+        demand_exception = (
+            (OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d >= seed_used * OUTRATE_PEG_SEED_MULT)
+            or (out_ratio < PERSISTENT_LOW_THRESH)   # drenado: não forçar queda por teto
+        )
+
+        if demand_exception and out_ppm_7d > 0:
+            # autoriza teto pelo outrate (com folga do PEG)
+            local_max = max(local_max, clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM)))))
+
         final_ppm = max(MIN_PPM, min(local_max, int(round(final_ppm))))
 
         # Telemetria: bateu no MAX_PPM global?
@@ -1164,7 +1188,9 @@ def main(dry_run=False):
                 diag_tags.append("⚠️subprice")
         if (state.get(cid, {}).get("low_streak", 0) or 0) >= EXTREME_DRAIN_STREAK and (state.get(cid, {}).get("baseline_fwd7d", 0) or 0) <= 2:
             diag_tags.append("💤stale-drain")
-
+        # >>> PATCH: tag de diagnóstico quando o PEG ficou ativo
+        if OUTRATE_PEG_ENABLE and 'outrate_peg_active' in locals() and outrate_peg_active:
+            diag_tags.append("🧲peg")
         if DEBUG_TAGS:
             diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
         status_tags = []  # já foi montado acima; só para clareza de ordem
@@ -1220,7 +1246,16 @@ def main(dry_run=False):
                         if hours_since < need2:
                             will_push = False
                             all_tags.append(f"⏳cooldown-profit{int(need2)}h")
-
+            # >>> PATCH: OUTRATE PEG — queda abaixo do outrate só após GRACE_HOURS
+            if new_ppm < local_ppm and OUTRATE_PEG_ENABLE and outrate_peg_active:
+                # se a nova taxa ficaria abaixo do 'preço observado', exija janela de graça maior
+                peg_limit = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+                if new_ppm < peg_limit:
+                    need_peg = max(COOLDOWN_HOURS_DOWN, OUTRATE_PEG_GRACE_HOURS)
+                    if hours_since < need_peg:
+                        will_push = False
+                        all_tags.append(f"⏳cooldown{int(need_peg)}h-outrate")
+        # ===== DRY RUN / EXCLUIR =====
         # DRY context: --dry-run ou excluido
         act_dry = dry_run or is_excluded
 
