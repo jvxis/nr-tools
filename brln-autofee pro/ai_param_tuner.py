@@ -4,6 +4,9 @@
 import os, json, sqlite3, datetime, time, math, argparse
 from collections import defaultdict
 from zoneinfo import ZoneInfo
+import re
+from pathlib import Path
+
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 
 # === paths (ajuste se necessário) ===
@@ -11,6 +14,9 @@ DB_PATH     = '/home/admin/lndg/data/db.sqlite3'
 CACHE_PATH  = "/home/admin/.cache/auto_fee_amboss.json"
 STATE_PATH  = "/home/admin/.cache/auto_fee_state.json"
 OVERRIDES   = "/home/admin/nr-tools/brln-autofee pro/autofee_overrides.json"
+
+# log do autofee que MOSTRA o que foi aplicado
+AUTOFEE_LOG_PATH = "/home/admin/autofee-apply.log"
 
 LOOKBACK_DAYS = 7
 
@@ -58,7 +64,7 @@ DAILY_CHANGE_BUDGET = {
     # Preço/pisos
     "OUTRATE_FLOOR_FACTOR": 0.06,
     "REVFLOOR_MIN_PPM_ABS": 30,
-    "REBAL_FLOOR_MARGIN":   0.03,
+    "REBAL_FLOOR_MARGIN":   0.05,  # ↑ era 0.03
 
     # Reatividade
     "STEP_CAP":             0.03,
@@ -80,7 +86,7 @@ DAILY_CHANGE_BUDGET = {
     # (Opcional) mistura de custo — se usar “blend”
     "REBAL_BLEND_LAMBDA":   0.20
 }
-META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
+META_PATH = "/home/admin/lndtools/autofee_meta.json"
 
 
 def clamp(v, lo, hi):
@@ -160,23 +166,57 @@ def get_7d_kpis():
 
 def read_symptoms_from_logs():
     """
-    Lê STATE/CACHE e procura contadores de sintomas que seu reporter costuma indicar.
-    Se quiser, você pode também varrer o último relatório impresso em arquivo e contar ocorrências.
+    Lê o último bloco de relatório do autofee (texto aplicado) em /home/admin/autofee-apply.log e conta tags.
+    Retorna um dict com: floor_lock, no_down_low, hold_small, cb_trigger, discovery.
+    Também tenta parsear a linha 'Symptoms: {...}' se ela existir no relatório.
     """
-    cache = load_json(CACHE_PATH, {}) or {}
-    state = load_json(STATE_PATH, {}) or {}
-
-    # Heurística: se você salva o último relatório textual em /home/admin/lndtools/autofee.log,
-    # vale a pena varrer as últimas N linhas e contar tags. Aqui mantemos simples:
     counts = {
         "floor_lock": 0,
         "no_down_low": 0,
         "hold_small": 0,
-        "cb_trigger": 0
+        "cb_trigger": 0,
+        "discovery": 0,
     }
 
-    # Procura indicadores agregados no STATE (se você quiser, salve também contadores lá)
-    # Mantemos zero se não existir — o agente continua robusto.
+    log_path = Path(AUTOFEE_LOG_PATH)
+    if not log_path.exists():
+        return counts
+
+    try:
+        with log_path.open("r", encoding="utf-8", errors="ignore") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            back = min(size, 200_000)  # lê só o final pra ser leve
+            f.seek(size - back)
+            tail = f.read()
+    except Exception:
+        return counts
+
+    # tenta isolar o último bloco do relatório
+    header_re = re.compile(r'(?:DRY[-\s]*RUN\s*)?[\u2699\uFE0F\u200D\uFE0F]*\s*AutoFee\s*\|\s*janela\s*\d+d', re.IGNORECASE)
+    hits = list(header_re.finditer(tail))
+    block = tail[hits[-1].start():] if hits else tail
+
+    # 1) Se houver "Symptoms: {...}" no bloco, parseia
+    m = re.search(r"Symptoms:\s*\{([^}]*)\}", block)
+    if m:
+        try:
+            inner = "{" + m.group(1) + "}"
+            inner = inner.replace("'", '"')
+            parsed = json.loads(inner)
+            for k in counts.keys():
+                if k in parsed and isinstance(parsed[k], (int, float)):
+                    counts[k] = int(parsed[k])
+        except Exception:
+            pass
+
+    # 2) Contagem direta por TAGs (complementa o que já foi lido)
+    counts["floor_lock"] += len(re.findall(r'🧱floor-lock', block))
+    counts["no_down_low"] += len(re.findall(r'🙅‍♂️no-down-low', block))
+    counts["hold_small"] += len(re.findall(r'🧘hold-small', block))
+    counts["cb_trigger"] += len(re.findall(r'🧯\s*CB:', block))
+    counts["discovery"]  += len(re.findall(r'🧪discovery', block))
+
     return counts
 
 def adjust(overrides, kpis, symptoms):
@@ -189,6 +229,7 @@ def adjust(overrides, kpis, symptoms):
     prof_sat = kpis["profit_sat"]
     out_ppm  = kpis["out_ppm7d"]
     rebal_ppm= kpis["rebal_cost_ppm7d"]
+    profit_ppm_est = kpis["profit_ppm_est"]
 
     # carrega atuais (ou defaults)
     def get(k):
@@ -209,15 +250,22 @@ def adjust(overrides, kpis, symptoms):
     # opcional
     REBAL_BLEND_LAMBDA    = get("REBAL_BLEND_LAMBDA")
 
-    # 1) Se lucro muito baixo ou negativo e rebal custo alto → endurecer pisos por receita
-    if prof_sat < 0 or (rebal_ppm > 250 and (out_ppm - rebal_ppm) < 80):
+    # --- sinais globais úteis ---
+    bad_profit = (profit_ppm_est < 0 or prof_sat < 0)
+    rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
+
+    # 1) P/L ruim e rebal caro → endurecer pisos por receita (PRIORIDADE ALTA)
+    if bad_profit and rebal_overpriced:
         OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         REVFLOOR_MIN_PPM_ABS = int(clamp(REVFLOOR_MIN_PPM_ABS + 10, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
+        # também subir a margem de piso do rebal
+        REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN + 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REVFLOOR_MIN_PPM_ABS"] = REVFLOOR_MIN_PPM_ABS
+        changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
-    # 2) Se MUITO floor-lock recorrente (supõe sintomas coletados) → reduzir REBAL_FLOOR_MARGIN
-    if symptoms.get("floor_lock", 0) >= 15:
+    # 2) MUITO floor-lock recorrente → só reduzir a margin SE não estivermos em tendência ruim
+    if symptoms.get("floor_lock", 0) >= 15 and not bad_profit:
         REBAL_FLOOR_MARGIN = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
 
@@ -230,57 +278,51 @@ def adjust(overrides, kpis, symptoms):
         changed["SURGE_K"] = SURGE_K
         changed["SURGE_BUMP_MAX"] = SURGE_BUMP_MAX
 
-    # 4) Muitas micro-updates seguradas (hold-small) → relaxar thresholds do BOS
+    # 4) Muitas micro-updates seguradas (hold-small) → relaxar thresholds do BOS (apenas se lucro > 0)
     if symptoms.get("hold_small", 0) >= 20 and prof_sat > 0:
         BOS_PUSH_MIN_ABS_PPM  = int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"]))
         BOS_PUSH_MIN_REL_FRAC = clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"])
         changed["BOS_PUSH_MIN_ABS_PPM"]  = BOS_PUSH_MIN_ABS_PPM
         changed["BOS_PUSH_MIN_REL_FRAC"] = BOS_PUSH_MIN_REL_FRAC
 
-    # 5) Circuit-breaker disparando demais → desacelerar STEP_CAP e reforçar cooldown de queda
+    # 5) Circuit-breaker demais → reduzir STEP_CAP e reforçar cooldown de queda
     if symptoms.get("cb_trigger", 0) >= 8:
         STEP_CAP = clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"])
         COOLDOWN_DOWN = clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"])
         changed["STEP_CAP"] = STEP_CAP
         changed["COOLDOWN_HOURS_DOWN"] = COOLDOWN_DOWN
+        # e subir cooldown de subida (desacelera novas altas)
+        COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
+        changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
 
-    # 6) Se lucro alto e rebal baixo → pode afrouxar levemente pisos para ganhar volume
+    # 6) P/L muito bom e rebal baixo → afrouxa levemente pisos para ganhar volume
     if prof_sat > 50_000 and rebal_ppm < 120 and out_ppm < 600:
         OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR - 0.02, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
-    # 5b) CB alto → subir cooldown de subida (desacelera novas altas)
-    if symptoms.get("cb_trigger", 0) >= 8:
-        COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
-        changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
-
     # 3b) Drenagem crônica + tendência ruim → permitir escalada um pouco maior (teto)
-    if (symptoms.get("no_down_low", 0) >= 10) and (kpis["profit_ppm_est"] < 0):
+    if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
         PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
         changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
 
     # Rollback suave se tendência melhorar (afrouxa aos poucos)
-    if kpis["profit_ppm_est"] > 0:
-        # reduz cooldown de subida
+    if profit_ppm_est > 0:
         new_up = clamp(COOLDOWN_UP - 1, *LIMITS["COOLDOWN_HOURS_UP"])
         if new_up != COOLDOWN_UP:
             changed["COOLDOWN_HOURS_UP"] = new_up
-        # reduz teto de persistência
         new_plmax = clamp(PERSISTENT_LOW_MAX - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
         if new_plmax != PERSISTENT_LOW_MAX:
             changed["PERSISTENT_LOW_MAX"] = new_plmax
 
-    # (Opcional) estratégia: se custo global >> preço, você pode aproximar o blend do global
-    # Ex.: se profit_ppm_est muito negativo por longo período, mover lambda +0.05 (até 1.0)
-    # (Deixe comentado se não quiser ativar)
-    # if kpis["profit_ppm_est"] < -150:
+    # # (Opcional) aproximar blend do global em tendência muito ruim por longo período
+    # if profit_ppm_est < -150:
     #     REBAL_BLEND_LAMBDA = clamp(REBAL_BLEND_LAMBDA + 0.05, *LIMITS["REBAL_BLEND_LAMBDA"])
     #     changed["REBAL_BLEND_LAMBDA"] = REBAL_BLEND_LAMBDA
 
-    # retorna overrides novos (somente o que mudou)
     return changed
+
 
 # =========================
 # Anti-ratchet helpers
@@ -396,13 +438,24 @@ def main(dry_run=False, verbose=True):
         proposed = adjust(cur, kpis, symptoms)
         # aplica limites de range
         proposed = apply_limits(proposed)
+
+        # --- pista de emergência: libera budget da margin em cenário crítico ---
+        severe_bad = (kpis.get("profit_ppm_est", 0) < -150 or kpis.get("profit_sat", 0) < 0)
+        too_many_floorlocks = (symptoms.get("floor_lock", 0) >= 20)
+        if proposed and ("REBAL_FLOOR_MARGIN" in proposed) and severe_bad and too_many_floorlocks:
+            meta.setdefault("daily_budget", {})
+            meta["daily_budget"].pop("REBAL_FLOOR_MARGIN", None)
+
         # aplica orçamento diário
         proposed = enforce_daily_budget(cur, proposed, meta)
+
         if verbose and proposed:
             used = load_json(META_PATH, {}).get("daily_budget", {})
             print("[budget] uso hoje:", used)
-        # se não passou no debounce temporal, cancela aplicação (mas mostra no log)
-        if proposed and not can_change_now(meta):
+
+        # cooldown com bypass em cenário crítico
+        bypass_cooldown = severe_bad and too_many_floorlocks
+        if proposed and (not can_change_now(meta)) and (not bypass_cooldown):
             if verbose:
                 print("KPIs 7d:", kpis)
                 print("Symptoms:", symptoms)
@@ -444,4 +497,3 @@ if __name__ == "__main__":
     ap.add_argument("--dry-run", action="store_true", help="Apenas mostra os ajustes; não grava o JSON.")
     args = ap.parse_args()
     main(dry_run=args.dry_run, verbose=True)
-
