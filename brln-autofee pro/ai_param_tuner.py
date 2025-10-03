@@ -20,6 +20,14 @@ AUTOFEE_LOG_PATH = "/home/admin/autofee-apply.log"
 
 LOOKBACK_DAYS = 7
 
+# =========================
+# Heurística pró-lucro (camadas)
+# =========================
+SAT_PROFIT_MIN       = 50_000   # lucro em sats/7d considerado “ok”
+PPM_WORSE            = -120     # profit_ppm_est “muito ruim”
+PPM_MEH              = -60      # levemente ruim
+REQUIRED_GOOD_STREAK = 2        # janelas positivas consecutivas p/ “afrouxar”
+
 # === limites de segurança para knobs ===
 LIMITS = {
     "STEP_CAP":                (0.02, 0.15),
@@ -27,15 +35,17 @@ LIMITS = {
     "SURGE_BUMP_MAX":          (0.10, 0.50),
     "PERSISTENT_LOW_BUMP":     (0.03, 0.12),
     "PERSISTENT_LOW_MAX":      (0.10, 0.40),
-    "REBAL_FLOOR_MARGIN":      (0.05, 0.25),
+    "REBAL_FLOOR_MARGIN":      (0.05, 0.30),   # ↑ teto 0.25 -> 0.30
     "REVFLOOR_MIN_PPM_ABS":    (100, 400),
-    "OUTRATE_FLOOR_FACTOR":    (0.85, 1.20),
+    "OUTRATE_FLOOR_FACTOR":    (0.85, 1.35),   # ↑ teto 1.20 -> 1.35
     "BOS_PUSH_MIN_ABS_PPM":    (5, 20),
     "BOS_PUSH_MIN_REL_FRAC":   (0.01, 0.06),
     "COOLDOWN_HOURS_DOWN":     (3, 18),
     "COOLDOWN_HOURS_UP":       (1, 12),
     # Opcional (se usar blend de custo)
-    "REBAL_BLEND_LAMBDA":      (0.0, 1.0)
+    "REBAL_BLEND_LAMBDA":      (0.0, 1.0),
+    # Opcional: expor bump de margem negativa do Auto-fee
+    "NEG_MARGIN_SURGE_BUMP":   (0.05, 0.20),
 }
 
 DEFAULTS = {
@@ -52,7 +62,9 @@ DEFAULTS = {
     "COOLDOWN_HOURS_DOWN": 6,
     "COOLDOWN_HOURS_UP": 3,
     # Opcional (se usar blend de custo)
-    "REBAL_BLEND_LAMBDA": 0.30
+    "REBAL_BLEND_LAMBDA": 0.30,
+    # Opcional: caso seja lido pelo Auto-fee
+    "NEG_MARGIN_SURGE_BUMP": 0.05,
 }
 
 # Anti-ratchet (higiene)
@@ -62,9 +74,9 @@ REQUIRED_BAD_STREAK = 2              # nº mínimo de janelas seguidas com profi
 # Orçamento diário de variação ABSOLUTA por chave (somatório de |passos| no dia).
 DAILY_CHANGE_BUDGET = {
     # Preço/pisos
-    "OUTRATE_FLOOR_FACTOR": 0.06,
-    "REVFLOOR_MIN_PPM_ABS": 30,
-    "REBAL_FLOOR_MARGIN":   0.05,  # ↑ era 0.03
+    "OUTRATE_FLOOR_FACTOR": 0.08,    # ↑ 0.06 -> 0.08
+    "REVFLOOR_MIN_PPM_ABS": 40,      # ↑ 30 -> 40
+    "REBAL_FLOOR_MARGIN":   0.08,    # ↑ 0.05 -> 0.08
 
     # Reatividade
     "STEP_CAP":             0.03,
@@ -84,9 +96,12 @@ DAILY_CHANGE_BUDGET = {
     "COOLDOWN_HOURS_DOWN":  4,
 
     # (Opcional) mistura de custo — se usar “blend”
-    "REBAL_BLEND_LAMBDA":   0.20
+    "REBAL_BLEND_LAMBDA":   0.20,
+
+    # Opcional: ajuste de bump de margem negativa
+    "NEG_MARGIN_SURGE_BUMP": 0.03,
 }
-META_PATH = "/home/admin/lndtools/autofee_meta.json"
+META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
 
 
 def clamp(v, lo, hi):
@@ -221,7 +236,7 @@ def read_symptoms_from_logs():
 
 def adjust(overrides, kpis, symptoms):
     """
-    Regras conservadoras de ajuste.
+    Regras conservadoras de ajuste (pró-lucro).
     Retorna NOVOS VALORES (absolutos) apenas para chaves a alterar.
     """
     changed = {}
@@ -247,25 +262,40 @@ def adjust(overrides, kpis, symptoms):
     BOS_PUSH_MIN_REL_FRAC = get("BOS_PUSH_MIN_REL_FRAC")
     COOLDOWN_DOWN         = get("COOLDOWN_HOURS_DOWN")
     COOLDOWN_UP           = get("COOLDOWN_HOURS_UP")
-    # opcional
+    # opcionais
     REBAL_BLEND_LAMBDA    = get("REBAL_BLEND_LAMBDA")
+    NEG_MARGIN_SURGE_BUMP = get("NEG_MARGIN_SURGE_BUMP")
+
+    # --- severidade (pró-lucro em sats) ---
+    if prof_sat <= 0:
+        bad_tier = "hard"  # prejuízo em sats → reagir forte
+    elif prof_sat < SAT_PROFIT_MIN and profit_ppm_est < PPM_MEH:
+        bad_tier = "medium"
+    elif profit_ppm_est < PPM_WORSE:
+        bad_tier = "medium"
+    else:
+        bad_tier = "ok"
 
     # --- sinais globais úteis ---
-    bad_profit = (profit_ppm_est < 0 or prof_sat < 0)
     rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
 
-    # 1) P/L ruim e rebal caro → endurecer pisos por receita (PRIORIDADE ALTA)
-    if bad_profit and rebal_overpriced:
-        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03, *LIMITS["OUTRATE_FLOOR_FACTOR"])
-        REVFLOOR_MIN_PPM_ABS = int(clamp(REVFLOOR_MIN_PPM_ABS + 10, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
-        # também subir a margem de piso do rebal
-        REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN + 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
+    # 1) P/L ruim e rebal caro → endurecer pisos (intensidade por bad_tier)
+    if bad_tier in ("hard", "medium") and rebal_overpriced:
+        incr = 1.0 if bad_tier == "hard" else 0.66
+        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+        REVFLOOR_MIN_PPM_ABS = int(clamp(REVFLOOR_MIN_PPM_ABS + 10*incr, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
+        REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REVFLOOR_MIN_PPM_ABS"] = REVFLOOR_MIN_PPM_ABS
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
+        # opcional: dar mais “pressão” a canais com margem negativa no Auto-fee
+        NEG_MARGIN_SURGE_BUMP = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01),
+                                      *LIMITS["NEG_MARGIN_SURGE_BUMP"])
+        changed["NEG_MARGIN_SURGE_BUMP"] = NEG_MARGIN_SURGE_BUMP
+
     # 2) MUITO floor-lock recorrente → só reduzir a margin SE não estivermos em tendência ruim
-    if symptoms.get("floor_lock", 0) >= 15 and not bad_profit:
+    if symptoms.get("floor_lock", 0) >= 15 and bad_tier == "ok":
         REBAL_FLOOR_MARGIN = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
 
@@ -277,6 +307,11 @@ def adjust(overrides, kpis, symptoms):
         changed["PERSISTENT_LOW_BUMP"] = PERSISTENT_LOW_BUMP
         changed["SURGE_K"] = SURGE_K
         changed["SURGE_BUMP_MAX"] = SURGE_BUMP_MAX
+
+    # 3b) Drenagem crônica + tendência ruim → permitir escalada um pouco maior (teto)
+    if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
+        PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+        changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
 
     # 4) Muitas micro-updates seguradas (hold-small) → relaxar thresholds do BOS (apenas se lucro > 0)
     if symptoms.get("hold_small", 0) >= 20 and prof_sat > 0:
@@ -291,36 +326,18 @@ def adjust(overrides, kpis, symptoms):
         COOLDOWN_DOWN = clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"])
         changed["STEP_CAP"] = STEP_CAP
         changed["COOLDOWN_HOURS_DOWN"] = COOLDOWN_DOWN
-        # e subir cooldown de subida (desacelera novas altas)
         COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
         changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
 
-    # 6) P/L muito bom e rebal baixo → afrouxa levemente pisos para ganhar volume
-    if prof_sat > 50_000 and rebal_ppm < 120 and out_ppm < 600:
-        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR - 0.02, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+    # 6) Quando já estamos lucrando bem em sats e a margem ppm está perto do zero,
+    #    afrouxa levemente pisos para buscar movimento SEM perder lucro.
+    if (prof_sat >= SAT_PROFIT_MIN and profit_ppm_est > -40 and symptoms.get("floor_lock", 0) >= 25):
+        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
-    # 3b) Drenagem crônica + tendência ruim → permitir escalada um pouco maior (teto)
-    if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
-        PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
-        changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
-
-    # Rollback suave se tendência melhorar (afrouxa aos poucos)
-    if profit_ppm_est > 0:
-        new_up = clamp(COOLDOWN_UP - 1, *LIMITS["COOLDOWN_HOURS_UP"])
-        if new_up != COOLDOWN_UP:
-            changed["COOLDOWN_HOURS_UP"] = new_up
-        new_plmax = clamp(PERSISTENT_LOW_MAX - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
-        if new_plmax != PERSISTENT_LOW_MAX:
-            changed["PERSISTENT_LOW_MAX"] = new_plmax
-
-    # # (Opcional) aproximar blend do global em tendência muito ruim por longo período
-    # if profit_ppm_est < -150:
-    #     REBAL_BLEND_LAMBDA = clamp(REBAL_BLEND_LAMBDA + 0.05, *LIMITS["REBAL_BLEND_LAMBDA"])
-    #     changed["REBAL_BLEND_LAMBDA"] = REBAL_BLEND_LAMBDA
-
+    # Rollback suave condicionado a good_streak (feito no main, mas se quiser manter aqui, deixe neutro)
     return changed
 
 
@@ -331,11 +348,17 @@ def load_meta():
     try:
         if os.path.exists(META_PATH):
             with open(META_PATH, "r") as f:
-                return json.load(f)
+                meta = json.load(f)
+                meta.setdefault("last_change_ts", 0)
+                meta.setdefault("bad_streak", 0)
+                meta.setdefault("good_streak", 0)   # <--- novo
+                meta.setdefault("daily_budget", {})
+                meta.setdefault("last_day", None)
+                return meta
     except:
         pass
     # estrutura inicial
-    return {"last_change_ts": 0, "bad_streak": 0, "daily_budget": {}, "last_day": None}
+    return {"last_change_ts": 0, "bad_streak": 0, "good_streak": 0, "daily_budget": {}, "last_day": None}
 
 def save_meta(meta):
     os.makedirs(os.path.dirname(META_PATH), exist_ok=True)
@@ -353,6 +376,12 @@ def update_bad_streak(meta, profit_ppm_est):
         meta["bad_streak"] = int(meta.get("bad_streak", 0)) + 1
     else:
         meta["bad_streak"] = 0
+
+def update_good_streak(meta, prof_sat, profit_ppm_est):
+    if profit_ppm_est > 0 and prof_sat >= SAT_PROFIT_MIN:
+        meta["good_streak"] = int(meta.get("good_streak", 0)) + 1
+    else:
+        meta["good_streak"] = 0
 
 def enforce_daily_budget(current_overrides, proposed_new_values, meta):
     """
@@ -420,6 +449,8 @@ def apply_limits(proposed):
 # MAIN
 # =========================
 def main(dry_run=False, verbose=True):
+    # imprime timestamp local no topo do bloco de logs
+    print(datetime.datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S"))
     kpis = get_7d_kpis()
     symptoms = read_symptoms_from_logs()
 
@@ -431,6 +462,7 @@ def main(dry_run=False, verbose=True):
     # anti-ratchet meta
     meta = load_meta()
     update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
+    update_good_streak(meta, kpis.get("profit_sat", 0), kpis.get("profit_ppm_est", 0.0))
 
     # cálculo de variações desejadas (absolutas)
     proposed = {}
@@ -439,12 +471,17 @@ def main(dry_run=False, verbose=True):
         # aplica limites de range
         proposed = apply_limits(proposed)
 
-        # --- pista de emergência: libera budget da margin em cenário crítico ---
-        severe_bad = (kpis.get("profit_ppm_est", 0) < -150 or kpis.get("profit_sat", 0) < 0)
+        # --- pista de emergência: libera budget dos pisos em cenário crítico ---
+        prof_sat = kpis.get("profit_sat", 0)
+        profit_ppm_est = kpis.get("profit_ppm_est", 0)
+        # “hard” ruim se prejuízo em sats OU ppm muito ruim
+        severe_bad = (prof_sat <= 0 or profit_ppm_est < PPM_WORSE)
         too_many_floorlocks = (symptoms.get("floor_lock", 0) >= 20)
-        if proposed and ("REBAL_FLOOR_MARGIN" in proposed) and severe_bad and too_many_floorlocks:
-            meta.setdefault("daily_budget", {})
-            meta["daily_budget"].pop("REBAL_FLOOR_MARGIN", None)
+        if proposed and severe_bad:
+            # libera orçamento diário para as 3 chaves de piso
+            for k in ("REBAL_FLOOR_MARGIN", "OUTRATE_FLOOR_FACTOR", "REVFLOOR_MIN_PPM_ABS"):
+                meta.setdefault("daily_budget", {})
+                meta["daily_budget"].pop(k, None)
 
         # aplica orçamento diário
         proposed = enforce_daily_budget(cur, proposed, meta)
@@ -453,7 +490,7 @@ def main(dry_run=False, verbose=True):
             used = load_json(META_PATH, {}).get("daily_budget", {})
             print("[budget] uso hoje:", used)
 
-        # cooldown com bypass em cenário crítico
+        # cooldown com bypass em cenário crítico + floorlock alto
         bypass_cooldown = severe_bad and too_many_floorlocks
         if proposed and (not can_change_now(meta)) and (not bypass_cooldown):
             if verbose:
@@ -471,6 +508,19 @@ def main(dry_run=False, verbose=True):
             print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
         save_meta(meta)
         return
+
+    # --- rollback suave (afrouxar lentamente) condicionado a good_streak ---
+    if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
+        # Afrouxa levemente apenas se não houver proposta conflitante
+        cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
+        new_up = clamp(cu - 1, *LIMITS["COOLDOWN_HOURS_UP"])
+        if "COOLDOWN_HOURS_UP" not in proposed and new_up != cu:
+            proposed["COOLDOWN_HOURS_UP"] = new_up
+
+        plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
+        new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+        if "PERSISTENT_LOW_MAX" not in proposed and new_plmax != plmax:
+            proposed["PERSISTENT_LOW_MAX"] = new_plmax
 
     if verbose:
         print("KPIs 7d:", kpis)

@@ -63,7 +63,10 @@ MIN_REBAL_VALUE_SAT = 400_000  # igual ao AutoFee
 MIN_REBAL_COUNT     = 3        # e pelo menos 3 rebalances
 
 # Cooldown mínimo entre trocas de ON/OFF (dwell time)
-MIN_DWELL_HOURS = 2
+MIN_DWELL_HOURS = 0.5
+
+# >>> NOVO: habilita o bypass de cooldown para desligar imediatamente em condições seguras
+FAST_OFF_ENABLE = True
 
 # Bias por classe (fallback quando não houver bias_ema no state)
 CLASS_BIAS = {
@@ -85,17 +88,15 @@ def demand_bonus(baseline_fwds: int) -> float:
         return 0.04   # +4pp
     return 0.00
 
-# ===== Exclusões: exatamente como você colou ===== Exemplo Usar ChainID
+# ===== Exclusões: exatamente como você colou =====
 EXCLUSION_LIST = [
 #'891080507132936203', #LNBig Edge3 16M
-#'891176164674764808', #LNBIG Hub2
-#'989812253171187713', #LNBIG Hub3 40M
 
 ]
 
 # (Opcional) Forçar canais como "source" mesmo se o AutoFee disser outra coisa
 FORCE_SOURCE_LIST = set([
-    # "985022780663070721",
+    #"982400445448257541", # Aldebaran
 ])
 
 # =========================
@@ -437,6 +438,32 @@ def hysteresis_decision(out_ratio: float, tgt_out_pct: int, current_on: bool, ca
             return None, "🚫 não liga: margem não cobre custo_7d"
         return None, "⏸️ não liga: dentro da faixa de histerese"
 
+# >>> NOVO: helper para ignorar cooldown apenas para DESLIGAR em condições seguras
+def bypass_dwell_for_off(ar_current: bool,
+                         proposed_toggle: Optional[bool],
+                         out_ratio: float,
+                         tgt_out_pct: int,
+                         price_ok: bool,
+                         prof_ok: bool,
+                         fill_lock_active: bool) -> bool:
+    """
+    Permite desligar imediatamente (ignora cooldown) se:
+      - já encheu acima do alvo+his, OU
+      - price-gate reprovado, OU
+      - lucro 7d insuficiente,
+    e não estamos em fill-lock (ou seja, não estamos deliberadamente enchendo).
+    """
+    if not FAST_OFF_ENABLE:
+        return False
+    if not ar_current or proposed_toggle is not False:
+        return False
+    if fill_lock_active:
+        return False
+    high = (tgt_out_pct + HYSTERESIS_PP) / 100.0
+    if (out_ratio >= high) or (not price_ok) or (not prof_ok):
+        return True
+    return False
+
 # =========================
 # MAIN
 # =========================
@@ -563,8 +590,20 @@ async def main():
                 last_sw = get_last_switch(state_af, cid) or 0
                 hours_since = (now - last_sw)/3600 if last_sw else 999
                 if hours_since < MIN_DWELL_HOURS:
-                    toggle = None
-                    hys_mot = f"⏳ cooldown: aguarde {MIN_DWELL_HOURS}h após última troca"
+                    # >>> FAST-OFF: ignora cooldown para DESLIGAR em condições seguras
+                    if bypass_dwell_for_off(
+                        ar_current=ar_current,
+                        proposed_toggle=toggle,
+                        out_ratio=out_r,
+                        tgt_out_pct=out_tgt,
+                        price_ok=price_ok,
+                        prof_ok=prof_ok,
+                        fill_lock_active=fill_lock_active
+                    ):
+                        hys_mot = (hys_mot + " | ⚡ fast-off: ignorando cooldown").strip()
+                    else:
+                        toggle = None
+                        hys_mot = f"⏳ cooldown: aguarde {MIN_DWELL_HOURS}h após última troca"
 
             # Montar payload — prioridade: fill-lock > cap-lock > normal
             payload = {}
@@ -595,17 +634,21 @@ async def main():
 
                     if "auto_rebalance" in payload:
                         set_last_switch(state_af, cid, bool(payload["auto_rebalance"]))
-
+                    
+                    # Estado do AR após esta atualização (se não veio no payload, mantém o atual)
+                    ar_state_after = payload.get("auto_rebalance", ar_current)
+                    ar_state_txt = "ON" if ar_state_after else "OFF"
+                    
                     # debug do bias aplicado
                     bias_pp_dbg = get_bias_pp_from_state(state_af, cid, cls_eff)
 
                     bits = []
-                    bits.append(f"⚙️ AutoFee params: LOW_OUTBOUND_THRESH={religa_out_thresh:.2f}")
+                    bits.append(f"⚙️ AutoFee params: Low Outbound Thresh={religa_out_thresh:.2f}")
                     bits.append(f"🎛️ bias={bias_pp_dbg:+.0f}pp (ema)")
                     bits.append(price_mot)                 # 🔒 price-gate
                     bits.append(prof_mot)                  # 💵 vs 🧮
                     if hys_mot:
-                        bits.append(hys_mot)               # 🔺/🔻/⏳/🚫/🔒
+                        bits.append(hys_mot)               # 🔺/🔻/⏳/🚫/🔒/⚡
                     if cap_lock_active and not fill_lock_active:
                         bits.append("🧷 cap-lock: preserva liquidez, evita virar fonte de rebal")
                     bits.append(f"🏷️{cls_eff} • 📈 base7d {baseline}")
@@ -624,6 +667,7 @@ async def main():
 
                     msg = (
                         f"✅ {action_txt} {alias} ({cid})\n"
+                        f"• 🔌 AR: {ar_state_txt}\n"
                         f"• 📊 out_ratio {out_r:.2f} • 💱 fee L/R {local_ppm}/{remote_ppm}ppm • 🧮 ar_max_cost {ar_max_cost:.0f}%\n"
                         f"• 🎯 alvo out/in {desired_out_target}/{in_tgt}%"
                         f"{' (source 5/95)' if cls_eff=='source' else lock_tag}\n"
@@ -664,8 +708,11 @@ async def main():
                     await update_channel(session, cid, {"ar_out_target": desired_out_target, "ar_in_target": in_tgt})
                     changes += 1
                     bias_pp_dbg = get_bias_pp_from_state(state_af, cid, cls_eff)
+                    ar_state_txt = "ON" if ar_current else "OFF"
+
                     txt = (
                         f"✅ 🛠️ TARGET {alias} ({cid})\n"
+                        f"• 🔌 AR: {ar_state_txt}\n"
                         f"• 📊 out_ratio {out_r:.2f} • 💱 fee L/R {local_ppm}/{remote_ppm}ppm • 🧮 ar_max_cost {ar_max_cost:.0f}%\n"
                         f"• 🎯 alvo out/in {desired_out_target}/{in_tgt}%"
                         f"{' (source 5/95)' if cls_eff=='source' else lock_tag}\n"
