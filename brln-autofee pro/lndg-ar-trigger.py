@@ -63,10 +63,15 @@ MIN_REBAL_VALUE_SAT = 400_000  # igual ao AutoFee
 MIN_REBAL_COUNT     = 3        # e pelo menos 3 rebalances
 
 # Cooldown mínimo entre trocas de ON/OFF (dwell time)
-MIN_DWELL_HOURS = 0.5
+MIN_DWELL_HOURS = 1
 
 # >>> NOVO: habilita o bypass de cooldown para desligar imediatamente em condições seguras
 FAST_OFF_ENABLE = True
+
+# >>> NOVO: kill-switch ultra-raro enquanto fill-lock está ativo (proteção de lucro)
+KILL_SWITCH_ENABLE   = True
+KILL_COST_PPM        = 1500   # se custo global >= isso, permitimos OFF mesmo no fill-lock
+KILL_PRICE_HARD      = True   # se price-gate reprovar durante fill, permitimos OFF
 
 # Bias por classe (fallback quando não houver bias_ema no state)
 CLASS_BIAS = {
@@ -91,12 +96,13 @@ def demand_bonus(baseline_fwds: int) -> float:
 # ===== Exclusões: exatamente como você colou =====
 EXCLUSION_LIST = [
 #'891080507132936203', #LNBig Edge3 16M
-
+#'891176164674764808' #LNBIG Hub2
 ]
 
 # (Opcional) Forçar canais como "source" mesmo se o AutoFee disser outra coisa
 FORCE_SOURCE_LIST = set([
     #"982400445448257541", # Aldebaran
+    #"982400445448257545"  # TennisNbtc
 ])
 
 # =========================
@@ -498,6 +504,11 @@ async def main():
         msgs: List[str] = []
         now = now_ts()
 
+        # >>> contadores para o header
+        cnt_on = 0
+        cnt_off = 0
+        cnt_target = 0
+
         for ch in channels:
             cid = str(ch.get("chan_id") or "")
             if not cid or cid in EXCLUSION_LIST:
@@ -553,6 +564,19 @@ async def main():
                     # enquanto não atingiu o alvo: não permitir desligar por preço/custo (apenas informativo)
                     price_mot = price_mot + " | 🔒 fill-lock ignora price-gate até atingir alvo"
                     prof_mot  = prof_mot  + " | 🔒 fill-lock ignora custo_7d até atingir alvo"
+
+                    # >>> NOVO: kill-switch ultra-raro (proteção de lucro) durante fill-lock
+                    if KILL_SWITCH_ENABLE:
+                        hard_cost_fail = (global_cost_ppm or 0) >= KILL_COST_PPM
+                        hard_price_fail = (not price_ok) if KILL_PRICE_HARD else False
+                        if hard_cost_fail or hard_price_fail:
+                            # libera decisão normal (permite OFF se histerese/condições mandarem)
+                            fill_lock_active = False
+                            reason = "custo_global_alto" if hard_cost_fail else "price_gate_reprovado"
+                            log_append({"type":"kill_switch_release", "cid": cid, "alias": alias, "reason": reason, "global_cost_ppm": int(global_cost_ppm or 0)})
+                            # adiciona nota no motivo
+                            price_mot = price_mot + " | 🧯 kill-switch liberou fill-lock"
+                            prof_mot  = prof_mot  + " | 🧯 kill-switch liberou fill-lock"
 
             # ---------- CAP-LOCK: se o novo alvo ficou menor do que o out_ratio atual, suba o alvo para o out_ratio ----------
             cap_lock_active = False
@@ -665,6 +689,15 @@ async def main():
                     action_txt = ("🟢 ON" if payload.get("auto_rebalance", ar_current)
                                   else "🛑 OFF") if "auto_rebalance" in payload else "🛠️ TARGET"
 
+                    # contadores
+                    if "auto_rebalance" in payload:
+                        if payload.get("auto_rebalance", ar_current):
+                            cnt_on += 1
+                        else:
+                            cnt_off += 1
+                    else:
+                        cnt_target += 1
+
                     msg = (
                         f"✅ {action_txt} {alias} ({cid})\n"
                         f"• 🔌 AR: {ar_state_txt}\n"
@@ -707,6 +740,7 @@ async def main():
                 try:
                     await update_channel(session, cid, {"ar_out_target": desired_out_target, "ar_in_target": in_tgt})
                     changes += 1
+                    cnt_target += 1
                     bias_pp_dbg = get_bias_pp_from_state(state_af, cid, cls_eff)
                     ar_state_txt = "ON" if ar_current else "OFF"
 
@@ -735,6 +769,25 @@ async def main():
                     msgs.append(err)
                     log_append({"type":"error","cid":cid,"alias":alias,"error":str(e)})
 
+            # >>> NOVO: telemetria de por que não houve toggle (somente quando nada foi trocado)
+            if toggle is None:
+                reasons = []
+                if cls_eff == "source":
+                    reasons.append("source-policy")
+                if fill_lock_active:
+                    reasons.append("fill-lock")
+                if not price_ok:
+                    reasons.append("price-gate")
+                if not prof_ok:
+                    reasons.append("no-profit")
+                # r vs thresholds (religa)
+                low = (out_tgt - HYSTERESIS_PP)/100.0
+                if out_r > max(low, religa_out_thresh):
+                    reasons.append(f"r>{max(low, religa_out_thresh):.2f}")
+                if reasons:
+                    log_append({"type":"no_toggle","cid":cid,"alias":alias,"reasons":reasons,
+                                "out_ratio":round(out_r,4),"out_tgt":out_tgt,"religa":religa_out_thresh})
+
         # salvar STATE_PATH se houve troca (cooldown persistido)
         if changes > 0:
             save_json(STATE_PATH, state_af)
@@ -743,7 +796,8 @@ async def main():
                   f"| chans={len(channels)} "
                   f"| global_out={global_out_ratio:.2f} "
                   f"| rebal7d≈{int(global_cost_ppm or 0)}ppm "
-                  f"| mudanças={changes}")
+                  f"| mudanças={changes} "
+                  f"| on={cnt_on} | off={cnt_off} | target={cnt_target}")
         body = "\n\n".join(msgs) if msgs else "Sem mudanças."
         await tg_send(session, f"{header}\n{body}")
 
