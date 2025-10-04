@@ -11,6 +11,8 @@ import re
 import sqlite3
 import time
 from typing import Dict, Any, List, Optional, Tuple
+import re
+from pathlib import Path
 
 # =========================
 # HARD-CODE CONFIG
@@ -42,6 +44,10 @@ AUTO_FEE_PARAMS_CACHE  = "/home/admin/nr-tools/brln-autofee pro/params_autofee.j
 
 # Log local (auditoria)
 LOG_PATH = "/home/admin/lndg_ar_actions.log"
+
+# Versão centralizada (texto): 1ª linha útil define a versão ativa
+# Ex.: 0.2.9 - Descrição da versão
+VERSIONS_FILE = "/home/admin/nr-tools/brln-autofee pro/versions.txt"
 
 # Histerese no alvo de outbound (pontos percentuais)
 HYSTERESIS_PP = 5
@@ -108,6 +114,37 @@ FORCE_SOURCE_LIST = set([
 # =========================
 # Utilidades
 # =========================
+
+# =========================
+# Utilidades
+# =========================
+def read_version_info(path: str) -> Dict[str, str]:
+    """
+    Lê a primeira linha útil (não vazia e não começando com '#') do arquivo de versões.
+    Aceita: 'X.Y.Z - descrição...' ou apenas 'X.Y.Z'.
+    Retorna {"version": "X.Y.Z", "desc": "..."}.
+    """
+    info = {"version": "0.0.0", "desc": ""}
+    try:
+        p = Path(path)
+        if not p.exists():
+            return info
+        with p.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                m = re.match(r"^\s*([0-9]+(?:\.[0-9]+){1,2})\s*(?:-\s*(.+))?$", line)
+                if m:
+                    info["version"] = m.group(1).strip()
+                    info["desc"] = (m.group(2) or "").strip()
+                else:
+                    info["version"] = line
+                    info["desc"] = ""
+                break
+    except Exception:
+        pass
+    return info
 
 def clamp_ratio(x: float, lo=0.0, hi=1.0) -> float:
     return max(lo, min(hi, x))
@@ -477,6 +514,9 @@ def bypass_dwell_for_off(ar_current: bool,
 async def main():
     timeout = aiohttp.ClientTimeout(total=40)
     connector = aiohttp.TCPConnector(limit=8)
+    version_info = read_version_info(VERSIONS_FILE)
+    vstr = version_info.get("version", "0.0.0")
+
     async with aiohttp.ClientSession(timeout=timeout, connector=connector) as session:
         # 0) Carregar parâmetros do AutoFee diretamente do arquivo oficial
         af_params = load_autofee_params()
@@ -792,12 +832,13 @@ async def main():
         if changes > 0:
             save_json(STATE_PATH, state_af)
 
-        header = (f"⚡ LNDg AR Trigger v2  "
-                  f"| chans={len(channels)} "
-                  f"| global_out={global_out_ratio:.2f} "
-                  f"| rebal7d≈{int(global_cost_ppm or 0)}ppm "
-                  f"| mudanças={changes} "
-                  f"| on={cnt_on} | off={cnt_off} | target={cnt_target}")
+        header = (f"⚡ LNDg AR Trigger v{vstr} "
+          f"| chans={len(channels)} "
+          f"| global_out={global_out_ratio:.2f} "
+          f"| rebal7d≈{int(global_cost_ppm or 0)}ppm "
+          f"| mudanças={changes} "
+          f"| on={cnt_on} | off={cnt_off} | target={cnt_target}")
+
         body = "\n\n".join(msgs) if msgs else "Sem mudanças."
         await tg_send(session, f"{header}\n{body}")
 

@@ -7,6 +7,16 @@ from zoneinfo import ZoneInfo
 import re
 from pathlib import Path
 
+try:
+    import requests  # para Telegram
+except Exception:
+    requests = None  # manter execução sem Telegram
+
+
+# === Telegram (HARD-CODE p/ testes; opcional) ===
+TELEGRAM_TOKEN = "SEU BOT TOKEN"  # <<< PREENCHER
+TELEGRAM_CHAT  = "SEU CHAT ID"   # <<< PREENCHER
+
 LOCAL_TZ = ZoneInfo("America/Sao_Paulo")
 
 # === paths (ajuste se necessário) ===
@@ -17,6 +27,11 @@ OVERRIDES   = "/home/admin/nr-tools/brln-autofee pro/autofee_overrides.json"
 
 # log do autofee que MOSTRA o que foi aplicado
 AUTOFEE_LOG_PATH = "/home/admin/autofee-apply.log"
+
+# controle de versão centralizado (texto)
+# 1ª linha útil (não vazia e não começando com '#') = versão ativa
+# Ex.: 0.3.1 - Ajuste de pisos, bugfix de budget, melhora no PEG
+VERSIONS_FILE = "/home/admin/nr-tools/brln-autofee pro/versions.txt"
 
 LOOKBACK_DAYS = 7
 
@@ -104,6 +119,35 @@ DAILY_CHANGE_BUDGET = {
 META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
 
 
+# =========================
+# Versão centralizada (leitura do topo da lista)
+# =========================
+def read_version_info(path: str):
+    info = {"version": "0.0.0", "desc": ""}
+    try:
+        p = Path(path)
+        if not p.exists():
+            return info
+        with p.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                m = re.match(r"^\s*([0-9]+(?:\.[0-9]+){1,2})\s*-\s*(.+)$", line)
+                if m:
+                    info["version"] = m.group(1).strip()
+                    info["desc"] = m.group(2).strip()
+                else:
+                    info["version"] = line
+                    info["desc"] = ""
+                break
+    except Exception:
+        pass
+    return info
+
+# =========================
+# Utilidades
+# =========================
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
 
@@ -130,14 +174,15 @@ def to_sqlite_str(dt):
         dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
     return dt.isoformat(sep=' ', timespec='seconds')
 
+# =========================
+# KPIs e sintomas
+# =========================
 def get_7d_kpis():
-    # KPIs derivados do LNDg: lucro, custo de rebal, etc.
     t2 = datetime.datetime.now(datetime.timezone.utc)
     t1 = t2 - datetime.timedelta(days=LOOKBACK_DAYS)
     conn = sqlite3.connect(DB_PATH)
     cur  = conn.cursor()
 
-    # Forwards 7d
     cur.execute("""
     SELECT amt_out_msat, fee FROM gui_forwards
     WHERE forward_date BETWEEN ? AND ?
@@ -150,7 +195,6 @@ def get_7d_kpis():
         out_amt_sat += int((a_msat or 0)/1000)
         out_fee_sat += int(fee or 0)
 
-    # Rebal payments 7d
     cur.execute("""
     SELECT value, fee FROM gui_payments
     WHERE rebal_chan IS NOT NULL
@@ -180,39 +224,22 @@ def get_7d_kpis():
     return kpis
 
 def read_symptoms_from_logs():
-    """
-    Lê o último bloco de relatório do autofee (texto aplicado) em /home/admin/autofee-apply.log e conta tags.
-    Retorna um dict com: floor_lock, no_down_low, hold_small, cb_trigger, discovery.
-    Também tenta parsear a linha 'Symptoms: {...}' se ela existir no relatório.
-    """
-    counts = {
-        "floor_lock": 0,
-        "no_down_low": 0,
-        "hold_small": 0,
-        "cb_trigger": 0,
-        "discovery": 0,
-    }
-
+    counts = { "floor_lock": 0, "no_down_low": 0, "hold_small": 0, "cb_trigger": 0, "discovery": 0 }
     log_path = Path(AUTOFEE_LOG_PATH)
     if not log_path.exists():
         return counts
-
     try:
         with log_path.open("r", encoding="utf-8", errors="ignore") as f:
             f.seek(0, 2)
             size = f.tell()
-            back = min(size, 200_000)  # lê só o final pra ser leve
+            back = min(size, 200_000)
             f.seek(size - back)
             tail = f.read()
     except Exception:
         return counts
-
-    # tenta isolar o último bloco do relatório
     header_re = re.compile(r'(?:DRY[-\s]*RUN\s*)?[\u2699\uFE0F\u200D\uFE0F]*\s*AutoFee\s*\|\s*janela\s*\d+d', re.IGNORECASE)
     hits = list(header_re.finditer(tail))
     block = tail[hits[-1].start():] if hits else tail
-
-    # 1) Se houver "Symptoms: {...}" no bloco, parseia
     m = re.search(r"Symptoms:\s*\{([^}]*)\}", block)
     if m:
         try:
@@ -224,29 +251,23 @@ def read_symptoms_from_logs():
                     counts[k] = int(parsed[k])
         except Exception:
             pass
-
-    # 2) Contagem direta por TAGs (complementa o que já foi lido)
     counts["floor_lock"] += len(re.findall(r'🧱floor-lock', block))
     counts["no_down_low"] += len(re.findall(r'🙅‍♂️no-down-low', block))
     counts["hold_small"] += len(re.findall(r'🧘hold-small', block))
     counts["cb_trigger"] += len(re.findall(r'🧯\s*CB:', block))
     counts["discovery"]  += len(re.findall(r'🧪discovery', block))
-
     return counts
 
+# =========================
+# Lógica de ajuste
+# =========================
 def adjust(overrides, kpis, symptoms):
-    """
-    Regras conservadoras de ajuste (pró-lucro).
-    Retorna NOVOS VALORES (absolutos) apenas para chaves a alterar.
-    """
     changed = {}
-
     prof_sat = kpis["profit_sat"]
     out_ppm  = kpis["out_ppm7d"]
     rebal_ppm= kpis["rebal_cost_ppm7d"]
     profit_ppm_est = kpis["profit_ppm_est"]
 
-    # carrega atuais (ou defaults)
     def get(k):
         return float(overrides.get(k, DEFAULTS.get(k))) if isinstance(DEFAULTS.get(k), (int,float)) else overrides.get(k, DEFAULTS.get(k))
 
@@ -262,13 +283,11 @@ def adjust(overrides, kpis, symptoms):
     BOS_PUSH_MIN_REL_FRAC = get("BOS_PUSH_MIN_REL_FRAC")
     COOLDOWN_DOWN         = get("COOLDOWN_HOURS_DOWN")
     COOLDOWN_UP           = get("COOLDOWN_HOURS_UP")
-    # opcionais
     REBAL_BLEND_LAMBDA    = get("REBAL_BLEND_LAMBDA")
     NEG_MARGIN_SURGE_BUMP = get("NEG_MARGIN_SURGE_BUMP")
 
-    # --- severidade (pró-lucro em sats) ---
     if prof_sat <= 0:
-        bad_tier = "hard"  # prejuízo em sats → reagir forte
+        bad_tier = "hard"
     elif prof_sat < SAT_PROFIT_MIN and profit_ppm_est < PPM_MEH:
         bad_tier = "medium"
     elif profit_ppm_est < PPM_WORSE:
@@ -276,10 +295,8 @@ def adjust(overrides, kpis, symptoms):
     else:
         bad_tier = "ok"
 
-    # --- sinais globais úteis ---
     rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
 
-    # 1) P/L ruim e rebal caro → endurecer pisos (intensidade por bad_tier)
     if bad_tier in ("hard", "medium") and rebal_overpriced:
         incr = 1.0 if bad_tier == "hard" else 0.66
         OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
@@ -288,18 +305,13 @@ def adjust(overrides, kpis, symptoms):
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REVFLOOR_MIN_PPM_ABS"] = REVFLOOR_MIN_PPM_ABS
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
-
-        # opcional: dar mais “pressão” a canais com margem negativa no Auto-fee
-        NEG_MARGIN_SURGE_BUMP = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01),
-                                      *LIMITS["NEG_MARGIN_SURGE_BUMP"])
+        NEG_MARGIN_SURGE_BUMP = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
         changed["NEG_MARGIN_SURGE_BUMP"] = NEG_MARGIN_SURGE_BUMP
 
-    # 2) MUITO floor-lock recorrente → só reduzir a margin SE não estivermos em tendência ruim
     if symptoms.get("floor_lock", 0) >= 15 and bad_tier == "ok":
         REBAL_FLOOR_MARGIN = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
 
-    # 3) Drenagem crônica (no-down-low alto) → subir PERSISTENT_LOW_BUMP e SURGE_K
     if symptoms.get("no_down_low", 0) >= 10:
         PERSISTENT_LOW_BUMP = clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"])
         SURGE_K = clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"])
@@ -308,19 +320,16 @@ def adjust(overrides, kpis, symptoms):
         changed["SURGE_K"] = SURGE_K
         changed["SURGE_BUMP_MAX"] = SURGE_BUMP_MAX
 
-    # 3b) Drenagem crônica + tendência ruim → permitir escalada um pouco maior (teto)
     if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
         PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
         changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
 
-    # 4) Muitas micro-updates seguradas (hold-small) → relaxar thresholds do BOS (apenas se lucro > 0)
     if symptoms.get("hold_small", 0) >= 20 and prof_sat > 0:
         BOS_PUSH_MIN_ABS_PPM  = int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"]))
         BOS_PUSH_MIN_REL_FRAC = clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"])
         changed["BOS_PUSH_MIN_ABS_PPM"]  = BOS_PUSH_MIN_ABS_PPM
         changed["BOS_PUSH_MIN_REL_FRAC"] = BOS_PUSH_MIN_REL_FRAC
 
-    # 5) Circuit-breaker demais → reduzir STEP_CAP e reforçar cooldown de queda
     if symptoms.get("cb_trigger", 0) >= 8:
         STEP_CAP = clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"])
         COOLDOWN_DOWN = clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"])
@@ -329,17 +338,13 @@ def adjust(overrides, kpis, symptoms):
         COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
         changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
 
-    # 6) Quando já estamos lucrando bem em sats e a margem ppm está perto do zero,
-    #    afrouxa levemente pisos para buscar movimento SEM perder lucro.
     if (prof_sat >= SAT_PROFIT_MIN and profit_ppm_est > -40 and symptoms.get("floor_lock", 0) >= 25):
         OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
-    # Rollback suave condicionado a good_streak (feito no main, mas se quiser manter aqui, deixe neutro)
     return changed
-
 
 # =========================
 # Anti-ratchet helpers
@@ -351,13 +356,12 @@ def load_meta():
                 meta = json.load(f)
                 meta.setdefault("last_change_ts", 0)
                 meta.setdefault("bad_streak", 0)
-                meta.setdefault("good_streak", 0)   # <--- novo
+                meta.setdefault("good_streak", 0)
                 meta.setdefault("daily_budget", {})
                 meta.setdefault("last_day", None)
                 return meta
     except:
         pass
-    # estrutura inicial
     return {"last_change_ts": 0, "bad_streak": 0, "good_streak": 0, "daily_budget": {}, "last_day": None}
 
 def save_meta(meta):
@@ -371,7 +375,6 @@ def can_change_now(meta):
     return hours >= MIN_HOURS_BETWEEN_CHANGES
 
 def update_bad_streak(meta, profit_ppm_est):
-    # tendencia ruim quando profit_ppm_est < 0
     if profit_ppm_est < 0:
         meta["bad_streak"] = int(meta.get("bad_streak", 0)) + 1
     else:
@@ -384,15 +387,10 @@ def update_good_streak(meta, prof_sat, profit_ppm_est):
         meta["good_streak"] = 0
 
 def enforce_daily_budget(current_overrides, proposed_new_values, meta):
-    """
-    Limita variação ABSOLUTA aplicada por dia (soma de |passos|).
-    Recebe valores absolutos propostos e devolve valores absolutos aprovados (pós-limite).
-    """
     day = datetime.datetime.now(LOCAL_TZ).date().isoformat()
     if meta.get("last_day") != day:
         meta["daily_budget"] = {}
         meta["last_day"] = day
-
     allowed = {}
     for k, new_abs in proposed_new_values.items():
         old_abs = current_overrides.get(k, DEFAULTS.get(k))
@@ -402,40 +400,28 @@ def enforce_daily_budget(current_overrides, proposed_new_values, meta):
             old_abs = float(old_abs)
             new_abs = float(new_abs)
         except Exception:
-            # para chaves não-numéricas, apenas permite
             allowed[k] = new_abs
             continue
-
         diff = new_abs - old_abs
         if diff == 0:
             continue
-
         limit = DAILY_CHANGE_BUDGET.get(k)
         if not limit:
-            # sem orçamento → permite total, mas ainda respeita LIMITS
             allowed[k] = new_abs
             continue
-
         used = float(meta["daily_budget"].get(k, 0.0))
         room = max(0.0, limit - used)
         step = diff
-
-        # Se não há espaço, pula
         if room <= 0:
             continue
-
-        # Se o passo excede o espaço, corta
         if abs(step) > room:
             step = math.copysign(room, step)
-
         final_val = old_abs + step
         allowed[k] = final_val
         meta["daily_budget"][k] = used + abs(step)
-
     return allowed
 
 def apply_limits(proposed):
-    """Aplica LIMITS (clamp) nos valores numéricos propostos."""
     out = {}
     for k, v in proposed.items():
         if k in LIMITS:
@@ -446,58 +432,157 @@ def apply_limits(proposed):
     return out
 
 # =========================
+# Telegram helpers (hard-coded)
+# =========================
+def tg_enabled():
+    return (TELEGRAM_TOKEN not in (None, "")) and (TELEGRAM_CHAT not in (None, "")) and (requests is not None)
+
+def tg_send(text: str, disable_web_preview: bool=True):
+    if not tg_enabled():
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    max_len = 4096
+    chunks = [text[i:i+max_len] for i in range(0, len(text), max_len)] or [text]
+    for part in chunks:
+        try:
+            requests.post(url, json={
+                "chat_id": TELEGRAM_CHAT,
+                "text": part,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": disable_web_preview
+            }, timeout=10)
+        except Exception:
+            pass
+
+def fmt_num(n, zero_dash=False):
+    try:
+        if isinstance(n, (int, float)):
+            if abs(n) >= 1000 and abs(n) < 1_000_000:
+                return f"{n:,.0f}".replace(",", ".")
+            if abs(n) >= 1_000_000:
+                return f"{n/1_000_000:.2f}M"
+            if isinstance(n, float):
+                return f"{n:.2f}"
+            return str(n)
+        if zero_dash and (n == 0 or n == "0"):
+            return "–"
+        return str(n)
+    except Exception:
+        return str(n)
+
+def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked):
+    v = version_info.get("version","0.0.0")
+    vdesc = version_info.get("desc","")
+    header_icon = "🧪" if dry_run else "🔧"
+    title = f"{header_icon} AI Param Tuner v{v}"
+    ts = now_local.strftime("%Y-%m-%d %H:%M:%S")
+
+    kp = (
+        f"• <b>KPI 7d</b>: "
+        f"out_fee=<code>{fmt_num(kpis.get('out_fee_sat',0))}</code> sat | "
+        f"out_amt=<code>{fmt_num(kpis.get('out_amt_sat',0))}</code> sat | "
+        f"rebal_fee=<code>{fmt_num(kpis.get('rebal_fee_sat',0))}</code> sat\n"
+        f"• ppm_out=<code>{fmt_num(kpis.get('out_ppm7d',0.0))}</code> | "
+        f"ppm_rebal=<code>{fmt_num(kpis.get('rebal_cost_ppm7d',0.0))}</code> | "
+        f"profit_sat=<code>{fmt_num(kpis.get('profit_sat',0))}</code> | "
+        f"profit_ppm≈<code>{fmt_num(kpis.get('profit_ppm_est',0.0))}</code>"
+    )
+
+    sy = (
+        f"• <b>Symptoms</b>: "
+        f"🧱={symptoms.get('floor_lock',0)} | "
+        f"🙅‍♂️={symptoms.get('no_down_low',0)} | "
+        f"🧘={symptoms.get('hold_small',0)} | "
+        f"🧯={symptoms.get('cb_trigger',0)} | "
+        f"🧪={symptoms.get('discovery',0)}"
+    )
+
+    if proposed:
+        ch_lines = []
+        for k in sorted(proposed.keys()):
+            ch_lines.append(f"— <code>{k}</code> → <code>{fmt_num(proposed[k])}</code>")
+        ch_text = "\n".join(ch_lines)
+        changes = f"<b>Overrides</b> ({'dry-run' if dry_run else 'aplicado'}):\n{ch_text}"
+    else:
+        changes = "<b>Overrides</b>: –"
+
+    used_budget = load_json(META_PATH, {}).get("daily_budget", {})
+    if used_budget:
+        bu_lines = []
+        for k in sorted(used_budget.keys()):
+            bu_lines.append(f"{k}={fmt_num(used_budget[k])}")
+        budget = "• <b>Budget hoje</b>: " + ", ".join(bu_lines)
+    else:
+        budget = "• <b>Budget hoje</b>: –"
+
+    cooldown = "• <b>Cooldown</b>: ⏳ bloqueado nesta janela (sem bypass)." if cooldown_blocked else "• <b>Cooldown</b>: ok"
+    vdesc_line = f"\n<i>{vdesc}</i>" if vdesc else ""
+
+    msg = (
+        f"<b>{title}</b>{vdesc_line}\n"
+        f"<code>{ts}</code>\n\n"
+        f"{kp}\n"
+        f"{sy}\n"
+        f"{budget}\n"
+        f"{cooldown}\n\n"
+        f"{changes}\n"
+        f"• file: <code>{OVERRIDES}</code>\n"
+    )
+    return msg
+
+# =========================
 # MAIN
 # =========================
-def main(dry_run=False, verbose=True):
-    # imprime timestamp local no topo do bloco de logs
-    print(datetime.datetime.now(LOCAL_TZ).strftime("%Y-%m-%d %H:%M:%S"))
+def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
+    now_local = datetime.datetime.now(LOCAL_TZ)
+    print(now_local.strftime("%Y-%m-%d %H:%M:%S"))
+
+    version_info = read_version_info(VERSIONS_FILE)
+
     kpis = get_7d_kpis()
     symptoms = read_symptoms_from_logs()
 
-    # carrega overrides atuais (ou defaults como base)
     cur = load_json(OVERRIDES, {}) or {}
     for k, v in DEFAULTS.items():
         cur.setdefault(k, v)
 
-    # anti-ratchet meta
     meta = load_meta()
     update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
     update_good_streak(meta, kpis.get("profit_sat", 0), kpis.get("profit_ppm_est", 0.0))
 
-    # cálculo de variações desejadas (absolutas)
     proposed = {}
+    cooldown_blocked = False
+
     if meta["bad_streak"] >= REQUIRED_BAD_STREAK:
         proposed = adjust(cur, kpis, symptoms)
-        # aplica limites de range
         proposed = apply_limits(proposed)
 
-        # --- pista de emergência: libera budget dos pisos em cenário crítico ---
         prof_sat = kpis.get("profit_sat", 0)
         profit_ppm_est = kpis.get("profit_ppm_est", 0)
-        # “hard” ruim se prejuízo em sats OU ppm muito ruim
         severe_bad = (prof_sat <= 0 or profit_ppm_est < PPM_WORSE)
         too_many_floorlocks = (symptoms.get("floor_lock", 0) >= 20)
         if proposed and severe_bad:
-            # libera orçamento diário para as 3 chaves de piso
             for k in ("REBAL_FLOOR_MARGIN", "OUTRATE_FLOOR_FACTOR", "REVFLOOR_MIN_PPM_ABS"):
                 meta.setdefault("daily_budget", {})
                 meta["daily_budget"].pop(k, None)
 
-        # aplica orçamento diário
         proposed = enforce_daily_budget(cur, proposed, meta)
 
         if verbose and proposed:
             used = load_json(META_PATH, {}).get("daily_budget", {})
             print("[budget] uso hoje:", used)
 
-        # cooldown com bypass em cenário crítico + floorlock alto
         bypass_cooldown = severe_bad and too_many_floorlocks
         if proposed and (not can_change_now(meta)) and (not bypass_cooldown):
+            cooldown_blocked = True
             if verbose:
                 print("KPIs 7d:", kpis)
                 print("Symptoms:", symptoms)
                 print("Changes (bloqueado por cooldown temporal):", proposed)
                 print(f"[info] aguardando {MIN_HOURS_BETWEEN_CHANGES}h entre alterações.")
+            if (force_telegram or (tg_enabled() and not no_telegram)):
+                tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=True)
+                tg_send(tg_msg)
             save_meta(meta)
             return
     else:
@@ -506,12 +591,13 @@ def main(dry_run=False, verbose=True):
             print("Symptoms:", symptoms)
             print("Changes:", {})
             print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
+        if (force_telegram or (tg_enabled() and not no_telegram)):
+            tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, {}, meta, dry_run, cooldown_blocked=False)
+            tg_send(tg_msg)
         save_meta(meta)
         return
 
-    # --- rollback suave (afrouxar lentamente) condicionado a good_streak ---
     if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
-        # Afrouxa levemente apenas se não houver proposta conflitante
         cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
         new_up = clamp(cu - 1, *LIMITS["COOLDOWN_HOURS_UP"])
         if "COOLDOWN_HOURS_UP" not in proposed and new_up != cu:
@@ -527,8 +613,11 @@ def main(dry_run=False, verbose=True):
         print("Symptoms:", symptoms)
         print("Changes:", proposed)
 
+    if (force_telegram or (tg_enabled() and not no_telegram)):
+        tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=False)
+        tg_send(tg_msg)
+
     if not dry_run and proposed:
-        # aplica (merge) e salva overrides
         cur.update(proposed)
         save_json(OVERRIDES, cur)
         meta["last_change_ts"] = int(time.time())
@@ -537,13 +626,16 @@ def main(dry_run=False, verbose=True):
             print(f"[ok] overrides atualizados em {OVERRIDES}")
     elif dry_run and proposed and verbose:
         print("[dry-run] alterações propostas (não salvas).")
-        save_meta(meta)  # ainda assim atualiza meta (streak/orçamento do dia)
-    elif verbose:
-        print("[info] nada a alterar.")
+        save_meta(meta)
+    else:
+        if verbose:
+            print("[info] nada a alterar.")
         save_meta(meta)
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="Apenas mostra os ajustes; não grava o JSON.")
+    ap.add_argument("--telegram", action="store_true", help="Força envio no Telegram (mesmo em dry-run).")
+    ap.add_argument("--no-telegram", action="store_true", help="Não envia mensagem no Telegram.")
     args = ap.parse_args()
-    main(dry_run=args.dry_run, verbose=True)
+    main(dry_run=args.dry_run, verbose=True, force_telegram=args.telegram, no_telegram=args.no_telegram)

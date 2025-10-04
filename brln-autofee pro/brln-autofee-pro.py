@@ -4,6 +4,8 @@
 import os, sys, time, json, math, sqlite3, datetime, subprocess, argparse
 from collections import defaultdict
 import requests
+import re
+from pathlib import Path
 
 # ========== CONFIG ==========
 # ✅ CONFIRA ESTES PATHS:
@@ -18,6 +20,10 @@ AMBOSS_URL   = "https://api.amboss.space/graphql"
 # Telegram (opcional; só envia quando NÃO for --dry-run)
 TELEGRAM_TOKEN = ""                             # <<< PREENCHER se quiser notificar
 TELEGRAM_CHAT  = ""                             # <<< PREENCHER (id do chat/grupo)
+
+# Versão centralizada (texto): 1ª linha útil define a versão ativa
+# Ex.: 0.2.9 - Descrição da versão
+VERSIONS_FILE = "/home/admin/nr-tools/brln-autofee pro/versions.txt"
 
 # =========================
 # CONFIG (perfil conservador pró-lucro)
@@ -349,6 +355,35 @@ def has_column(cur, table, column):
     cur.execute(f"PRAGMA table_info({table})")
     return any(r[1] == column for r in cur.fetchall())
 
+def read_version_info(path: str):
+    """
+    Lê a primeira linha útil do arquivo de versões.
+    Formato esperado: 'X.Y.Z - descrição...'
+    Retorna dict: {"version": "X.Y.Z", "desc": "descrição..."} com defaults seguros.
+    """
+    info = {"version": "0.0.0", "desc": ""}
+    try:
+        p = Path(path)
+        if not p.exists():
+            return info
+        with p.open("r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                m = re.match(r"^\s*([0-9]+(?:\.[0-9]+){1,2})\s*(?:-\s*(.+))?$", line)
+                if m:
+                    info["version"] = m.group(1).strip()
+                    info["desc"] = (m.group(2) or "").strip()
+                else:
+                    info["version"] = line
+                    info["desc"] = ""
+                break
+    except Exception:
+        pass
+    return info
+
+
 # === utilitário p/ piso conforme REBAL_COST_MODE ===
 def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
     """
@@ -548,6 +583,8 @@ def main(dry_run=False):
 
     cache = load_json(CACHE_PATH, {})
     state = get_state()
+    version_info = read_version_info(VERSIONS_FILE)
+    vstr = version_info.get("version", "0.0.0")
 
     t1_epoch, t2_epoch = epoch_days_ago(LOOKBACK_DAYS)
     start_dt = datetime.datetime.fromtimestamp(t1_epoch, datetime.timezone.utc)
@@ -690,7 +727,8 @@ def main(dry_run=False):
         shard_slot = (now_ts // 3600) % SHARD_MOD
 
     report = []
-    hdr = f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)"
+    hdr = f"{'DRY-RUN ' if dry_run else ''}⚙️ AutoFee v{vstr} | janela {LOOKBACK_DAYS}d | rebal≈ {int(rebal_cost_ppm_global)} ppm (gui_payments)"
+
     if SHARDING_ENABLE:
         hdr += f" | shard {shard_slot+1}/{SHARD_MOD}"
     report.append(hdr)

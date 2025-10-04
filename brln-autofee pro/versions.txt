@@ -1,0 +1,13 @@
+0.3.0 - Saída Telegram AI Tuner e Controle de Versão
+0.2.9 - Saída Telegram com overrides e versão centralizada; ajustes de budget e cooldown
+
+# ---- histórico (exemplos) ----
+0.2.8 - Clamp e orçamento por chave (daily change budget); leitura de sintomas do log
+0.2.7 - Heurística pró-lucro (sat e ppm) e rollback suave por good_streak
+0.2.6 - Limites de segurança revisados; pisos e histerese mais conservadores
+0.2.5 - Integração inicial com log do AutoFee (contagem de tags)
+0.2.4 - Melhoria no parser de KPIs (gui_forwards/gui_payments)
+0.2.3 - Refactor utilitários e saneamento de JSON de overrides
+0.2.2 - Ajustes de performance e limpeza de prints
+0.2.1 - Parametrização de LOOKBACK_DAYS
+0.2.0 - Primeira versão estável do tuner com ajustes básicos de pisos/step
