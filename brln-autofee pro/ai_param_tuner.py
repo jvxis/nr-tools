@@ -80,7 +80,7 @@ DEFAULTS = {
 
 # Anti-ratchet (higiene)
 MIN_HOURS_BETWEEN_CHANGES = 6
-REQUIRED_BAD_STREAK = 2   # se quiser reagir no 1º dia ruim, troque para 1
+REQUIRED_BAD_STREAK = 1   # se quiser reagir no 1º dia ruim, troque para 1
 
 # Orçamento diário de variação ABSOLUTA por chave
 DAILY_CHANGE_BUDGET = {
@@ -348,7 +348,7 @@ def load_meta():
 
 def save_meta(meta):
     os.makedirs(os.path.dirname(META_PATH), exist_ok=True)
-    with open(META_PATH, "w") as f:
+    with open(path := META_PATH, "w") as f:
         json.dump(meta, f, indent=2, sort_keys=True)
 
 def can_change_now(meta):
@@ -420,6 +420,54 @@ def apply_limits(proposed):
             out[k] = v
     return out
 
+def explain_discarded_changes(cur, pre, post, meta):
+    """
+    Retorna dict {knob: motivo} para propostas que existiam em `pre` mas sumiram em `post`.
+    Motivos possíveis:
+      - "at_limit": valor atual já está no limite (ou proposta clampou no mesmo valor)
+      - "no_budget": sem espaço no budget diário
+      - "no_diff": proposta igual ao valor atual
+      - "filtered": filtrado por lógica residual
+    """
+    reasons = {}
+    used = (meta or {}).get("daily_budget", {})
+    for k, new_val in pre.items():
+        old_val = cur.get(k, DEFAULTS.get(k))
+        # desapareceu após budget?
+        if k in post:
+            continue
+        try:
+            old_f = float(old_val)
+            new_f = float(new_val)
+        except Exception:
+            continue
+
+        # sem diferença efetiva
+        if abs(new_f - old_f) < 1e-12:
+            reasons[k] = "no_diff"
+            continue
+
+        # limite
+        if k in LIMITS:
+            lo, hi = LIMITS[k]
+            clamped = max(lo, min(hi, new_f))
+            if abs(clamped - old_f) < 1e-12:
+                reasons[k] = "at_limit"
+                continue
+
+        # sem budget
+        lim = DAILY_CHANGE_BUDGET.get(k)
+        if lim is not None:
+            used_k = float(used.get(k, 0.0))
+            room = max(0.0, lim - used_k)
+            if room <= 0:
+                reasons[k] = "no_budget"
+                continue
+
+        # fallback
+        reasons[k] = "filtered"
+    return reasons
+
 # =========================
 # Telegram helpers (hard-coded)
 # =========================
@@ -459,7 +507,7 @@ def fmt_num(n, zero_dash=False):
     except Exception:
         return str(n)
 
-def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked):
+def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked, discard_reasons=None):
     v = version_info.get("version","0.0.0")
     vdesc = version_info.get("desc","")
     header_icon = "🧪" if dry_run else "🔧"
@@ -486,7 +534,6 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         f"🧪={symptoms.get('discovery',0)}"
     )
 
-    # usa o meta em memória para refletir o budget atual/rolado no dia
     used_budget = (meta or {}).get("daily_budget", {})
     if used_budget:
         bu_lines = []
@@ -497,8 +544,6 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         budget = "• <b>Budget hoje</b>: –"
 
     cooldown = "• <b>Cooldown</b>: ⏳ bloqueado nesta janela (sem bypass)." if cooldown_blocked else "• <b>Cooldown</b>: ok"
-
-    # linha adicional de streak para dar contexto quando não há mudanças
     streak_line = f"• <b>Streak</b>: bad={meta.get('bad_streak',0)}/{REQUIRED_BAD_STREAK} | good={meta.get('good_streak',0)}/{REQUIRED_GOOD_STREAK}"
 
     if proposed:
@@ -509,6 +554,13 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         changes = f"<b>Overrides</b> ({'dry-run' if dry_run else 'aplicado'}):\n{ch_text}"
     else:
         changes = "<b>Overrides</b>: –"
+        if discard_reasons:
+            rs = []
+            legend = {"at_limit":"limite", "no_budget":"sem budget", "no_diff":"sem diferença", "filtered":"filtrado"}
+            for k in sorted(discard_reasons.keys()):
+                rs.append(f"{k}: {legend.get(discard_reasons[k], discard_reasons[k])}")
+            if rs:
+                changes += "\n<i>Sem aplicar porque</i>:\n• " + "\n• ".join(rs)
 
     vdesc_line = f"\n<i>{vdesc}</i>" if vdesc else ""
 
@@ -543,7 +595,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
 
     meta = load_meta()
 
-    # === NOVO: garantir rollover diário do budget SEMPRE, mesmo sem alterações
+    # === garantir rollover diário do budget SEMPRE
     rollover_daily_budget_if_needed(meta)
 
     update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
@@ -551,6 +603,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
 
     proposed = {}
     cooldown_blocked = False
+    discard_reasons = {}
 
     if meta["bad_streak"] >= REQUIRED_BAD_STREAK:
         proposed = adjust(cur, kpis, symptoms)
@@ -565,7 +618,11 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
                 meta.setdefault("daily_budget", {})
                 meta["daily_budget"].pop(k, None)
 
+        pre_budget = dict(proposed)
         proposed = enforce_daily_budget(cur, proposed, meta)
+
+        if pre_budget and not proposed:
+            discard_reasons = explain_discarded_changes(cur, pre_budget, proposed, meta)
 
         if verbose and proposed:
             used = meta.get("daily_budget", {})
@@ -580,7 +637,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
                 print("Changes (bloqueado por cooldown temporal):", proposed)
                 print(f"[info] aguardando {MIN_HOURS_BETWEEN_CHANGES}h entre alterações.")
             if (force_telegram or (tg_enabled() and not no_telegram)):
-                tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=True)
+                tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=True, discard_reasons=discard_reasons)
                 tg_send(tg_msg)
             save_meta(meta)
             return
@@ -591,7 +648,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
             print("Changes:", {})
             print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
         if (force_telegram or (tg_enabled() and not no_telegram)):
-            tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, {}, meta, dry_run, cooldown_blocked=False)
+            tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, {}, meta, dry_run, cooldown_blocked=False, discard_reasons=discard_reasons)
             tg_send(tg_msg)
         save_meta(meta)
         return
@@ -610,10 +667,12 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
     if verbose:
         print("KPIs 7d:", kpis)
         print("Symptoms:", symptoms)
-        print("Changes:", proposed)
+        print("Changes:", proposed if proposed else {})
+        if not proposed and discard_reasons:
+            print("[info] propostas descartadas:", discard_reasons)
 
     if (force_telegram or (tg_enabled() and not no_telegram)):
-        tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=False)
+        tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=False, discard_reasons=discard_reasons)
         tg_send(tg_msg)
 
     if not dry_run and proposed:
