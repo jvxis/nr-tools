@@ -50,16 +50,14 @@ LIMITS = {
     "SURGE_BUMP_MAX":          (0.10, 0.50),
     "PERSISTENT_LOW_BUMP":     (0.03, 0.12),
     "PERSISTENT_LOW_MAX":      (0.10, 0.40),
-    "REBAL_FLOOR_MARGIN":      (0.05, 0.30),   # ↑ teto 0.25 -> 0.30
+    "REBAL_FLOOR_MARGIN":      (0.05, 0.30),
     "REVFLOOR_MIN_PPM_ABS":    (100, 400),
-    "OUTRATE_FLOOR_FACTOR":    (0.85, 1.35),   # ↑ teto 1.20 -> 1.35
+    "OUTRATE_FLOOR_FACTOR":    (0.85, 1.35),
     "BOS_PUSH_MIN_ABS_PPM":    (5, 20),
     "BOS_PUSH_MIN_REL_FRAC":   (0.01, 0.06),
     "COOLDOWN_HOURS_DOWN":     (3, 18),
     "COOLDOWN_HOURS_UP":       (1, 12),
-    # Opcional (se usar blend de custo)
     "REBAL_BLEND_LAMBDA":      (0.0, 1.0),
-    # Opcional: expor bump de margem negativa do Auto-fee
     "NEG_MARGIN_SURGE_BUMP":   (0.05, 0.20),
 }
 
@@ -76,48 +74,32 @@ DEFAULTS = {
     "BOS_PUSH_MIN_REL_FRAC": 0.04,
     "COOLDOWN_HOURS_DOWN": 6,
     "COOLDOWN_HOURS_UP": 3,
-    # Opcional (se usar blend de custo)
     "REBAL_BLEND_LAMBDA": 0.30,
-    # Opcional: caso seja lido pelo Auto-fee
     "NEG_MARGIN_SURGE_BUMP": 0.05,
 }
 
 # Anti-ratchet (higiene)
-MIN_HOURS_BETWEEN_CHANGES = 6        # intervalo mínimo entre gravações de overrides
-REQUIRED_BAD_STREAK = 2              # nº mínimo de janelas seguidas com profit_ppm_est < 0
+MIN_HOURS_BETWEEN_CHANGES = 6
+REQUIRED_BAD_STREAK = 2   # se quiser reagir no 1º dia ruim, troque para 1
 
-# Orçamento diário de variação ABSOLUTA por chave (somatório de |passos| no dia).
+# Orçamento diário de variação ABSOLUTA por chave
 DAILY_CHANGE_BUDGET = {
-    # Preço/pisos
-    "OUTRATE_FLOOR_FACTOR": 0.08,    # ↑ 0.06 -> 0.08
-    "REVFLOOR_MIN_PPM_ABS": 40,      # ↑ 30 -> 40
-    "REBAL_FLOOR_MARGIN":   0.08,    # ↑ 0.05 -> 0.08
-
-    # Reatividade
+    "OUTRATE_FLOOR_FACTOR": 0.08,
+    "REVFLOOR_MIN_PPM_ABS": 40,
+    "REBAL_FLOOR_MARGIN":   0.08,
     "STEP_CAP":             0.03,
-
-    # Surge / drenagem
     "SURGE_K":              0.15,
     "SURGE_BUMP_MAX":       0.08,
     "PERSISTENT_LOW_BUMP":  0.02,
     "PERSISTENT_LOW_MAX":   0.06,
-
-    # Ruído de updates (BOS)
     "BOS_PUSH_MIN_ABS_PPM": 6,
     "BOS_PUSH_MIN_REL_FRAC":0.01,
-
-    # Histerese
     "COOLDOWN_HOURS_UP":    3,
     "COOLDOWN_HOURS_DOWN":  4,
-
-    # (Opcional) mistura de custo — se usar “blend”
     "REBAL_BLEND_LAMBDA":   0.20,
-
-    # Opcional: ajuste de bump de margem negativa
     "NEG_MARGIN_SURGE_BUMP": 0.03,
 }
 META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
-
 
 # =========================
 # Versão centralizada (leitura do topo da lista)
@@ -386,6 +368,13 @@ def update_good_streak(meta, prof_sat, profit_ppm_est):
     else:
         meta["good_streak"] = 0
 
+def rollover_daily_budget_if_needed(meta):
+    """Garante reset do budget diário, mesmo sem alterações propostas/aplicadas."""
+    day = datetime.datetime.now(LOCAL_TZ).date().isoformat()
+    if meta.get("last_day") != day:
+        meta["daily_budget"] = {}
+        meta["last_day"] = day
+
 def enforce_daily_budget(current_overrides, proposed_new_values, meta):
     day = datetime.datetime.now(LOCAL_TZ).date().isoformat()
     if meta.get("last_day") != day:
@@ -497,16 +486,8 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         f"🧪={symptoms.get('discovery',0)}"
     )
 
-    if proposed:
-        ch_lines = []
-        for k in sorted(proposed.keys()):
-            ch_lines.append(f"— <code>{k}</code> → <code>{fmt_num(proposed[k])}</code>")
-        ch_text = "\n".join(ch_lines)
-        changes = f"<b>Overrides</b> ({'dry-run' if dry_run else 'aplicado'}):\n{ch_text}"
-    else:
-        changes = "<b>Overrides</b>: –"
-
-    used_budget = load_json(META_PATH, {}).get("daily_budget", {})
+    # usa o meta em memória para refletir o budget atual/rolado no dia
+    used_budget = (meta or {}).get("daily_budget", {})
     if used_budget:
         bu_lines = []
         for k in sorted(used_budget.keys()):
@@ -516,6 +497,19 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         budget = "• <b>Budget hoje</b>: –"
 
     cooldown = "• <b>Cooldown</b>: ⏳ bloqueado nesta janela (sem bypass)." if cooldown_blocked else "• <b>Cooldown</b>: ok"
+
+    # linha adicional de streak para dar contexto quando não há mudanças
+    streak_line = f"• <b>Streak</b>: bad={meta.get('bad_streak',0)}/{REQUIRED_BAD_STREAK} | good={meta.get('good_streak',0)}/{REQUIRED_GOOD_STREAK}"
+
+    if proposed:
+        ch_lines = []
+        for k in sorted(proposed.keys()):
+            ch_lines.append(f"— <code>{k}</code> → <code>{fmt_num(proposed[k])}</code>")
+        ch_text = "\n".join(ch_lines)
+        changes = f"<b>Overrides</b> ({'dry-run' if dry_run else 'aplicado'}):\n{ch_text}"
+    else:
+        changes = "<b>Overrides</b>: –"
+
     vdesc_line = f"\n<i>{vdesc}</i>" if vdesc else ""
 
     msg = (
@@ -524,7 +518,8 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         f"{kp}\n"
         f"{sy}\n"
         f"{budget}\n"
-        f"{cooldown}\n\n"
+        f"{cooldown}\n"
+        f"{streak_line}\n\n"
         f"{changes}\n"
         f"• file: <code>{OVERRIDES}</code>\n"
     )
@@ -547,6 +542,10 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         cur.setdefault(k, v)
 
     meta = load_meta()
+
+    # === NOVO: garantir rollover diário do budget SEMPRE, mesmo sem alterações
+    rollover_daily_budget_if_needed(meta)
+
     update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
     update_good_streak(meta, kpis.get("profit_sat", 0), kpis.get("profit_ppm_est", 0.0))
 
@@ -569,7 +568,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         proposed = enforce_daily_budget(cur, proposed, meta)
 
         if verbose and proposed:
-            used = load_json(META_PATH, {}).get("daily_budget", {})
+            used = meta.get("daily_budget", {})
             print("[budget] uso hoje:", used)
 
         bypass_cooldown = severe_bad and too_many_floorlocks

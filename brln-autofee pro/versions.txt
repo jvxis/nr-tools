@@ -1,3 +1,4 @@
+0.3.1 - Melhorias AI Tuner
 0.3.0 - Saída Telegram AI Tuner e Controle de Versão
 0.2.9 - Saída Telegram com overrides e versão centralizada; ajustes de budget e cooldown
 
