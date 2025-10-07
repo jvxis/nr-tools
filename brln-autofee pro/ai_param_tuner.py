@@ -268,6 +268,7 @@ def adjust(overrides, kpis, symptoms):
     REBAL_BLEND_LAMBDA    = get("REBAL_BLEND_LAMBDA")
     NEG_MARGIN_SURGE_BUMP = get("NEG_MARGIN_SURGE_BUMP")
 
+    # Classificação de severidade
     if prof_sat <= 0:
         bad_tier = "hard"
     elif prof_sat < SAT_PROFIT_MIN and profit_ppm_est < PPM_MEH:
@@ -279,6 +280,9 @@ def adjust(overrides, kpis, symptoms):
 
     rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
 
+    # =========================
+    # Plano A (como já era): empurra pisos quando ruim + rebal caro
+    # =========================
     if bad_tier in ("hard", "medium") and rebal_overpriced:
         incr = 1.0 if bad_tier == "hard" else 0.66
         OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
@@ -287,9 +291,23 @@ def adjust(overrides, kpis, symptoms):
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REVFLOOR_MIN_PPM_ABS"] = REVFLOOR_MIN_PPM_ABS
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
+
         NEG_MARGIN_SURGE_BUMP = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
         changed["NEG_MARGIN_SURGE_BUMP"] = NEG_MARGIN_SURGE_BUMP
 
+    # =========================
+    # Alívio de floor-lock mesmo em bad (quando MUITO alto)
+    # =========================
+    if symptoms.get("floor_lock", 0) >= 100 and profit_ppm_est < 0:
+        # pequeno respiro para tentar destravar rota, respeitando limites
+        new_rebal_floor = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
+        if new_rebal_floor != REBAL_FLOOR_MARGIN:
+            REBAL_FLOOR_MARGIN = new_rebal_floor
+            changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
+
+    # =========================
+    # Regras existentes
+    # =========================
     if symptoms.get("floor_lock", 0) >= 15 and bad_tier == "ok":
         REBAL_FLOOR_MARGIN = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
         changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
@@ -326,7 +344,38 @@ def adjust(overrides, kpis, symptoms):
         changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
         changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
 
+    # =========================
+    # Plano B (fallback): se os 3 pisos estão no TETO e ainda estamos em bad, empurre knobs de surge/persistência
+    # =========================
+    at_out_floor_max = abs(OUTRATE_FLOOR_FACTOR - LIMITS["OUTRATE_FLOOR_FACTOR"][1]) < 1e-12
+    at_revfloor_max  = abs(float(REVFLOOR_MIN_PPM_ABS) - float(LIMITS["REVFLOOR_MIN_PPM_ABS"][1])) < 1e-12
+    at_rebal_marg_max= abs(REBAL_FLOOR_MARGIN - LIMITS["REBAL_FLOOR_MARGIN"][1]) < 1e-12
+
+    if bad_tier in ("hard", "medium") and (at_out_floor_max and at_revfloor_max and at_rebal_marg_max):
+        # Só empurre se ainda houver margem real nesses knobs
+        new_surge_k = clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"])
+        if new_surge_k != SURGE_K:
+            SURGE_K = new_surge_k
+            changed.setdefault("SURGE_K", SURGE_K)
+
+        new_surge_max = clamp(SURGE_BUMP_MAX + 0.03, *LIMITS["SURGE_BUMP_MAX"])
+        if new_surge_max != SURGE_BUMP_MAX:
+            SURGE_BUMP_MAX = new_surge_max
+            changed.setdefault("SURGE_BUMP_MAX", SURGE_BUMP_MAX)
+
+        new_pl_bump = clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"])
+        if new_pl_bump != PERSISTENT_LOW_BUMP:
+            PERSISTENT_LOW_BUMP = new_pl_bump
+            changed.setdefault("PERSISTENT_LOW_BUMP", PERSISTENT_LOW_BUMP)
+
+        if profit_ppm_est < 0:
+            new_pl_max = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+            if new_pl_max != PERSISTENT_LOW_MAX:
+                PERSISTENT_LOW_MAX = new_pl_max
+                changed.setdefault("PERSISTENT_LOW_MAX", PERSISTENT_LOW_MAX)
+
     return changed
+
 
 # =========================
 # Anti-ratchet helpers
