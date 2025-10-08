@@ -208,10 +208,10 @@ crontab -e
 ```
 # Dry-run diário para log (03:10):
 ```bash
-10 3 * * * /home/admin/brln-autofee-pro.py --dry-run >> /home/admin/brln-autofee_dry.log 2>&1
+10 3 * * * /home/admin/brln-autofee-pro.py --dry-run >> /home/admin/autofee_dry.log 2>&1
 
 # Execução valendo (03:15):
-15 3 * * * /home/admin/brln-autofee-pro.py >> /home/admin/brln-autofee.log 2>&1
+15 3 * * * /home/admin/brln-autofee-pro.py >> /home/admin/autofee-apply.log 2>&1
 ```
 ## 🛠️ Troubleshooting
 

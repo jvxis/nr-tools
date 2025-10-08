@@ -80,7 +80,7 @@ DEFAULTS = {
 
 # Anti-ratchet (higiene)
 MIN_HOURS_BETWEEN_CHANGES = 6
-REQUIRED_BAD_STREAK = 1   # se quiser reagir no 1º dia ruim, troque para 1
+REQUIRED_BAD_STREAK = 1   # reage já no 1º dia ruim
 
 # Orçamento diário de variação ABSOLUTA por chave
 DAILY_CHANGE_BUDGET = {
@@ -241,8 +241,30 @@ def read_symptoms_from_logs():
     return counts
 
 # =========================
-# Lógica de ajuste
+# Lógica de ajuste (v0.3.4)
 # =========================
+EPS = 1e-6
+
+def _set_change(changed, key, new_val, current_val):
+    """Só grava em 'changed' se houver delta real."""
+    try:
+        a = float(new_val); b = float(current_val)
+        if abs(a - b) < EPS:
+            return False
+    except Exception:
+        if new_val == current_val:
+            return False
+    changed[key] = new_val
+    return True
+
+def _near_max(val, lo, hi, frac=0.95):
+    return val >= (lo + frac*(hi - lo)) - 1e-12
+
+# === NOVO: teto suave p/ SURGE_BUMP_MAX ===
+def _surge_soft_cap(symptoms):
+    # libera teto global (0.50) quando floor_lock está muito alto; caso contrário, limita a 0.35
+    return LIMITS["SURGE_BUMP_MAX"][1] if symptoms.get("floor_lock", 0) >= 200 else 0.35
+
 def adjust(overrides, kpis, symptoms):
     changed = {}
     prof_sat = kpis["profit_sat"]
@@ -280,102 +302,111 @@ def adjust(overrides, kpis, symptoms):
 
     rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
 
-    # =========================
-    # Plano A (como já era): empurra pisos quando ruim + rebal caro
-    # =========================
-    if bad_tier in ("hard", "medium") and rebal_overpriced:
-        incr = 1.0 if bad_tier == "hard" else 0.66
-        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
-        REVFLOOR_MIN_PPM_ABS = int(clamp(REVFLOOR_MIN_PPM_ABS + 10*incr, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
-        REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
-        changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
-        changed["REVFLOOR_MIN_PPM_ABS"] = REVFLOOR_MIN_PPM_ABS
-        changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
-
-        NEG_MARGIN_SURGE_BUMP = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
-        changed["NEG_MARGIN_SURGE_BUMP"] = NEG_MARGIN_SURGE_BUMP
-
-    # =========================
-    # Alívio de floor-lock mesmo em bad (quando MUITO alto)
-    # =========================
+    # ============================================================
+    # 1) Alívio de floor-lock (ANTES de qualquer push de pisos)
+    # ============================================================
+    relief_applied = False
     if symptoms.get("floor_lock", 0) >= 100 and profit_ppm_est < 0:
-        # pequeno respiro para tentar destravar rota, respeitando limites
         new_rebal_floor = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
-        if new_rebal_floor != REBAL_FLOOR_MARGIN:
+        if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_floor, REBAL_FLOOR_MARGIN):
             REBAL_FLOOR_MARGIN = new_rebal_floor
-            changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
+            relief_applied = True
 
-    # =========================
-    # Regras existentes
-    # =========================
+    # ============================================================
+    # 2) Plano A (push de pisos) — só se NÃO teve alívio nessa rodada
+    # ============================================================
+    if not relief_applied and (bad_tier in ("hard", "medium") and rebal_overpriced):
+        incr = 1.0 if bad_tier == "hard" else 0.66
+
+        new_out_floor = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+        if _set_change(changed, "OUTRATE_FLOOR_FACTOR", new_out_floor, OUTRATE_FLOOR_FACTOR):
+            OUTRATE_FLOOR_FACTOR = new_out_floor
+
+        new_revfloor = int(clamp(REVFLOOR_MIN_PPM_ABS + 10*incr, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
+        if _set_change(changed, "REVFLOOR_MIN_PPM_ABS", new_revfloor, REVFLOOR_MIN_PPM_ABS):
+            REVFLOOR_MIN_PPM_ABS = new_revfloor
+
+        new_rebal_m = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
+        if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_m, REBAL_FLOOR_MARGIN):
+            REBAL_FLOOR_MARGIN = new_rebal_m
+
+        new_neg_surge = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
+        _set_change(changed, "NEG_MARGIN_SURGE_BUMP", new_neg_surge, NEG_MARGIN_SURGE_BUMP)
+
+    # ============================================================
+    # 3) Regras existentes (mantidas)
+    # ============================================================
     if symptoms.get("floor_lock", 0) >= 15 and bad_tier == "ok":
-        REBAL_FLOOR_MARGIN = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
-        changed["REBAL_FLOOR_MARGIN"] = REBAL_FLOOR_MARGIN
+        new_rebal_floor = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
+        _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_floor, REBAL_FLOOR_MARGIN)
 
     if symptoms.get("no_down_low", 0) >= 10:
-        PERSISTENT_LOW_BUMP = clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"])
-        SURGE_K = clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"])
-        SURGE_BUMP_MAX = clamp(SURGE_BUMP_MAX + 0.03, *LIMITS["SURGE_BUMP_MAX"])
-        changed["PERSISTENT_LOW_BUMP"] = PERSISTENT_LOW_BUMP
-        changed["SURGE_K"] = SURGE_K
-        changed["SURGE_BUMP_MAX"] = SURGE_BUMP_MAX
+        _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP)
+        _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K)
+        # <<<<<<<<<<<<<< SOFT CAP APLICADO AQUI
+        _set_change(
+            changed,
+            "SURGE_BUMP_MAX",
+            clamp(
+                SURGE_BUMP_MAX + 0.03,
+                LIMITS["SURGE_BUMP_MAX"][0],
+                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms)),
+            ),
+            SURGE_BUMP_MAX,
+        )
 
     if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
-        PERSISTENT_LOW_MAX = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
-        changed["PERSISTENT_LOW_MAX"] = PERSISTENT_LOW_MAX
+        _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX)
 
     if symptoms.get("hold_small", 0) >= 20 and prof_sat > 0:
-        BOS_PUSH_MIN_ABS_PPM  = int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"]))
-        BOS_PUSH_MIN_REL_FRAC = clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"])
-        changed["BOS_PUSH_MIN_ABS_PPM"]  = BOS_PUSH_MIN_ABS_PPM
-        changed["BOS_PUSH_MIN_REL_FRAC"] = BOS_PUSH_MIN_REL_FRAC
+        _set_change(changed, "BOS_PUSH_MIN_ABS_PPM", int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"])), BOS_PUSH_MIN_ABS_PPM)
+        _set_change(changed, "BOS_PUSH_MIN_REL_FRAC", clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"]), BOS_PUSH_MIN_REL_FRAC)
 
     if symptoms.get("cb_trigger", 0) >= 8:
-        STEP_CAP = clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"])
-        COOLDOWN_DOWN = clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"])
-        changed["STEP_CAP"] = STEP_CAP
-        changed["COOLDOWN_HOURS_DOWN"] = COOLDOWN_DOWN
-        COOLDOWN_UP = clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"])
-        changed["COOLDOWN_HOURS_UP"] = COOLDOWN_UP
+        _set_change(changed, "STEP_CAP", clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"]), STEP_CAP)
+        _set_change(changed, "COOLDOWN_HOURS_DOWN", clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"]), COOLDOWN_DOWN)
+        _set_change(changed, "COOLDOWN_HOURS_UP", clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"]), COOLDOWN_UP)
 
     if (prof_sat >= SAT_PROFIT_MIN and profit_ppm_est > -40 and symptoms.get("floor_lock", 0) >= 25):
-        OUTRATE_FLOOR_FACTOR = clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
-        REBAL_FLOOR_MARGIN   = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
-        changed["OUTRATE_FLOOR_FACTOR"] = OUTRATE_FLOOR_FACTOR
-        changed["REBAL_FLOOR_MARGIN"]   = REBAL_FLOOR_MARGIN
+        _set_change(changed, "OUTRATE_FLOOR_FACTOR", clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"]), OUTRATE_FLOOR_FACTOR)
+        _set_change(changed, "REBAL_FLOOR_MARGIN", clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"]), REBAL_FLOOR_MARGIN)
 
-    # =========================
-    # Plano B (fallback): se os 3 pisos estão no TETO e ainda estamos em bad, empurre knobs de surge/persistência
-    # =========================
-    at_out_floor_max = abs(OUTRATE_FLOOR_FACTOR - LIMITS["OUTRATE_FLOOR_FACTOR"][1]) < 1e-12
-    at_revfloor_max  = abs(float(REVFLOOR_MIN_PPM_ABS) - float(LIMITS["REVFLOOR_MIN_PPM_ABS"][1])) < 1e-12
-    at_rebal_marg_max= abs(REBAL_FLOOR_MARGIN - LIMITS["REBAL_FLOOR_MARGIN"][1]) < 1e-12
+    # Se houve alívio, não queremos empurrões de pisos nesta rodada:
+    if relief_applied:
+        for k in ("OUTRATE_FLOOR_FACTOR", "REVFLOOR_MIN_PPM_ABS", "REBAL_FLOOR_MARGIN"):
+            # preserva apenas o alívio já aplicado em REBAL_FLOOR_MARGIN
+            if k != "REBAL_FLOOR_MARGIN":
+                changed.pop(k, None)
 
-    if bad_tier in ("hard", "medium") and (at_out_floor_max and at_revfloor_max and at_rebal_marg_max):
-        # Só empurre se ainda houver margem real nesses knobs
-        new_surge_k = clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"])
-        if new_surge_k != SURGE_K:
-            SURGE_K = new_surge_k
-            changed.setdefault("SURGE_K", SURGE_K)
+    # ============================================================
+    # 4) Plano B relaxado (surge/persistência): ativa com 2/3 ~no teto ou floor_lock alto
+    # ============================================================
+    out_lo, out_hi = LIMITS["OUTRATE_FLOOR_FACTOR"]
+    rev_lo, rev_hi = LIMITS["REVFLOOR_MIN_PPM_ABS"]
+    reb_lo, reb_hi = LIMITS["REBAL_FLOOR_MARGIN"]
 
-        new_surge_max = clamp(SURGE_BUMP_MAX + 0.03, *LIMITS["SURGE_BUMP_MAX"])
-        if new_surge_max != SURGE_BUMP_MAX:
-            SURGE_BUMP_MAX = new_surge_max
-            changed.setdefault("SURGE_BUMP_MAX", SURGE_BUMP_MAX)
+    at_out = _near_max(OUTRATE_FLOOR_FACTOR, out_lo, out_hi)
+    at_rev = _near_max(float(REVFLOOR_MIN_PPM_ABS), rev_lo, rev_hi)
+    at_reb = _near_max(REBAL_FLOOR_MARGIN, reb_lo, reb_hi)
 
-        new_pl_bump = clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"])
-        if new_pl_bump != PERSISTENT_LOW_BUMP:
-            PERSISTENT_LOW_BUMP = new_pl_bump
-            changed.setdefault("PERSISTENT_LOW_BUMP", PERSISTENT_LOW_BUMP)
-
+    if (bad_tier in ("hard", "medium")) and ((at_out + at_rev + at_reb) >= 2 or symptoms.get("floor_lock", 0) >= 200):
+        _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K)
+        # <<<<<<<<<<<<<< SOFT CAP APLICADO AQUI
+        _set_change(
+            changed,
+            "SURGE_BUMP_MAX",
+            clamp(
+                SURGE_BUMP_MAX + 0.03,
+                LIMITS["SURGE_BUMP_MAX"][0],
+                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms)),
+            ),
+            SURGE_BUMP_MAX,
+        )
+        _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP)
         if profit_ppm_est < 0:
-            new_pl_max = clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
-            if new_pl_max != PERSISTENT_LOW_MAX:
-                PERSISTENT_LOW_MAX = new_pl_max
-                changed.setdefault("PERSISTENT_LOW_MAX", PERSISTENT_LOW_MAX)
+            _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX)
 
     return changed
-
 
 # =========================
 # Anti-ratchet helpers
@@ -492,7 +523,7 @@ def explain_discarded_changes(cur, pre, post, meta):
             continue
 
         # sem diferença efetiva
-        if abs(new_f - old_f) < 1e-12:
+        if abs(new_f - old_f) < EPS:
             reasons[k] = "no_diff"
             continue
 
@@ -500,7 +531,7 @@ def explain_discarded_changes(cur, pre, post, meta):
         if k in LIMITS:
             lo, hi = LIMITS[k]
             clamped = max(lo, min(hi, new_f))
-            if abs(clamped - old_f) < 1e-12:
+            if abs(clamped - old_f) < EPS:
                 reasons[k] = "at_limit"
                 continue
 
@@ -663,6 +694,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         severe_bad = (prof_sat <= 0 or profit_ppm_est < PPM_WORSE)
         too_many_floorlocks = (symptoms.get("floor_lock", 0) >= 20)
         if proposed and severe_bad:
+            # “zera” orçamento de pisos nessas condições
             for k in ("REBAL_FLOOR_MARGIN", "OUTRATE_FLOOR_FACTOR", "REVFLOOR_MIN_PPM_ABS"):
                 meta.setdefault("daily_budget", {})
                 meta["daily_budget"].pop(k, None)
@@ -674,8 +706,7 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
             discard_reasons = explain_discarded_changes(cur, pre_budget, proposed, meta)
 
         if verbose and proposed:
-            used = meta.get("daily_budget", {})
-            print("[budget] uso hoje:", used)
+            print("[budget] uso hoje:", meta.get("daily_budget", {}))
 
         bypass_cooldown = severe_bad and too_many_floorlocks
         if proposed and (not can_change_now(meta)) and (not bypass_cooldown):
@@ -746,3 +777,4 @@ if __name__ == "__main__":
     ap.add_argument("--no-telegram", action="store_true", help="Não envia mensagem no Telegram.")
     args = ap.parse_args()
     main(dry_run=args.dry_run, verbose=True, force_telegram=args.telegram, no_telegram=args.no_telegram)
+

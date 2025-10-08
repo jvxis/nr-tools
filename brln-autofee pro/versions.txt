@@ -1,3 +1,4 @@
+0.3.4 - Melhorias Ai Tuner
 0.3.3 - Fallback de surge/persistência + alívio de floor-lock em bad
 0.3.2 - Ai Tuner Diagnóstico de descartes + reage no 1º dia ruim
 0.3.1 - Melhorias AI Tuner
