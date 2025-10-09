@@ -73,14 +73,14 @@ CB_GRACE_DAYS  = 7      # janela de observação menor
 
 # --- Proteção de custo de rebal (PISO) ---
 REBAL_FLOOR_ENABLE = True      # habilita piso de segurança
-REBAL_FLOOR_MARGIN = 0.10      # 10% acima do custo médio de rebal 7d
+REBAL_FLOOR_MARGIN = 0.15      # 15% acima do custo médio de rebal 7d
 
 # --- Composição do custo no ALVO ---
 #   "global"      = usa só o custo global 7d
 #   "per_channel" = usa só o custo por canal 7d
 #   "blend"       = mistura global e por canal
 REBAL_COST_MODE = "per_channel"
-REBAL_BLEND_LAMBDA = 0.30      # se "blend": 30% global, 70% canal
+REBAL_BLEND_LAMBDA = 0.20      # se "blend": 30% global, 70% canal
 
 # --- Guard de anomalias do seed (Amboss p65) ---
 SEED_GUARD_ENABLE      = True
@@ -90,15 +90,15 @@ SEED_GUARD_ABS_MAX_PPM = 1600   # teto absoluto opcional (0/None para desativar)
 
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True
-OUTRATE_FLOOR_FACTOR      = 1
-OUTRATE_FLOOR_MIN_FWDS    = 1
+OUTRATE_FLOOR_FACTOR      = 1.10
+OUTRATE_FLOOR_MIN_FWDS    = 4
 
 # >>> PATCH: OUTRATE PEG (grudar no preço observado) e ajustes de floor
 OUTRATE_PEG_ENABLE         = True     # ativa proteção para não cair abaixo do preço que já vendeu
-OUTRATE_PEG_MIN_FWDS       = 1        # bastou 1 forward na janela para reconhecer 'preço observado'
-OUTRATE_PEG_HEADROOM       = 0.03     # folga de +3% acima do outrate observado
-OUTRATE_PEG_GRACE_HOURS    = 72       # só autoriza cair abaixo do outrate após 72h desde a última mudança
-OUTRATE_PEG_SEED_MULT      = 1.20     # se outrate >= 1.2x seed, trata como demanda real (fura teto seed*1.8)
+OUTRATE_PEG_MIN_FWDS       = 5        # bastou 5 forward na janela para reconhecer 'preço observado'
+OUTRATE_PEG_HEADROOM       = 0.01     # folga de +1% acima do outrate observado
+OUTRATE_PEG_GRACE_HOURS    = 36       # só autoriza cair abaixo do outrate após 36h desde a última mudança
+OUTRATE_PEG_SEED_MULT      = 1.10     # se outrate >= 1.05x seed, trata como demanda real (fura teto seed*1.8)
 
 # =========================
 # TUNING EXTRA
@@ -108,24 +108,24 @@ OUTRATE_PEG_SEED_MULT      = 1.20     # se outrate >= 1.2x seed, trata como dema
 DYNAMIC_STEP_CAP_ENABLE = True
 STEP_CAP_LOW_005 = 0.10   # out_ratio < 0.03
 STEP_CAP_LOW_010 = 0.07   # 0.03 <= out_ratio < 0.05
-STEP_CAP_IDLE_DOWN = 0.10 # fwd_count==0 & out_ratio>0.60 (queda)
+STEP_CAP_IDLE_DOWN = 0.12 # fwd_count==0 & out_ratio>0.60 (queda)
 STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
 
 # Floor por canal mais robusto
 REBAL_PERCHAN_MIN_VALUE_SAT = 400_000  # 200k -> 400k: precisa sinal real para usar custo por canal
-REBAL_FLOOR_SEED_CAP_FACTOR = 1.4      # teto do floor relativo ao seed
+REBAL_FLOOR_SEED_CAP_FACTOR = 1.2      # teto do floor relativo ao seed
 
 # Outrate floor dinâmico
 OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
-OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 1     # liga mais cedo
-OUTRATE_FLOOR_FACTOR_LOW          = 0.90  # piso um pouco maior
+OUTRATE_FLOOR_DISABLE_BELOW_FWDS  = 5     # liga mais cedo
+OUTRATE_FLOOR_FACTOR_LOW          = 0.85  # piso um pouco maior
 
 # Discovery mode: sem forwards e liquidez sobrando -> queda mais rápida e sem outrate floor
 DISCOVERY_ENABLE   = True
-DISCOVERY_OUT_MIN  = 0.30  # >30% outbound = sobra
+DISCOVERY_OUT_MIN  = 0.40  # >40% outbound = sobra
 DISCOVERY_FWDS_MAX = 0
 # MOD: hard-drop extra para canais realmente ociosos
-DISCOVERY_HARDDROP_DAYS_NO_BASE = 10   # se nunca gerou baseline em 10d, acelerar quedas
+DISCOVERY_HARDDROP_DAYS_NO_BASE = 6   # se nunca gerou baseline em 7d, acelerar quedas
 DISCOVERY_HARDDROP_CAP_FRAC     = 0.20 # step cap para QUEDAS
 DISCOVERY_HARDDROP_COLCHAO      = 10   # colchão efetivo reduzido
 
@@ -153,7 +153,7 @@ EXTREME_DRAIN_MIN_STEP_PPM = 15     # passo mínimo p/ SUBIR
 
 # MOD: Revenue floor (piso por tráfego) p/ super-rotas muito ativas
 REVFLOOR_ENABLE            = True
-REVFLOOR_BASELINE_THRESH   = 150
+REVFLOOR_BASELINE_THRESH   = 80
 REVFLOOR_MIN_PPM_ABS       = 140
 
 # 3) Margem 7d negativa
@@ -175,10 +175,10 @@ SURGE_RESPECT_STEPCAP = True
 # ========== HISTERÉSE (COOLDOWN) ==========
 APPLY_COOLDOWN_ENABLE = True
 COOLDOWN_HOURS_UP   = 3
-COOLDOWN_HOURS_DOWN = 6
+COOLDOWN_HOURS_DOWN = 5
 COOLDOWN_FWDS_MIN   = 2
 COOLDOWN_PROFIT_DOWN_ENABLE = True
-COOLDOWN_PROFIT_MARGIN_MIN  = 0
+COOLDOWN_PROFIT_MARGIN_MIN  = 10
 COOLDOWN_PROFIT_FWDS_MIN    = 10
 
 # ========== SHARDING ==========
@@ -216,11 +216,22 @@ ROUTER_BIAS_MAX                = 0.30
 CLASS_CONF_HYSTERESIS          = 0.10
 
 # Políticas por classe
-SINK_EXTRA_FLOOR_MARGIN        = 0.05
-SINK_MIN_OVER_SEED_FRAC        = 0.90
+SINK_EXTRA_FLOOR_MARGIN        = 0.10
+SINK_MIN_OVER_SEED_FRAC        = 1.00
 SOURCE_SEED_TARGET_FRAC        = 0.60
 SOURCE_DISABLE_OUTRATE_FLOOR   = True
 ROUTER_STEP_CAP_BONUS          = 0.02
+
+# === SEED HÍBRIDO (mediana/volatilidade/ratio) ===
+SEED_ADJUST_ENABLE        = True   # liga/desliga todo o bloco
+SEED_BLEND_MEDIAN_ALPHA   = 0.30   # 30% mediana + 70% seed base (p65 corrigido)
+SEED_VOLATILITY_K         = 0.25   # ganho da penalidade por σ/μ (0..0.3 recomend.)
+SEED_VOLATILITY_CAP       = 0.15   # máx. penalidade 15%
+SEED_RATIO_K              = 0.20   # ganho do viés por ratio out/in
+SEED_RATIO_MIN_FACTOR     = 0.80   # clamp do fator final por ratio
+SEED_RATIO_MAX_FACTOR     = 1.50
+AMBOSS_CACHE_TTL_SEC      = 3*3600 # reaproveita respostas por 3h
+
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
@@ -483,7 +494,7 @@ def amboss_seed_series_7d(pubkey, cache):
     """Busca série 7d de incoming_fee_rate_metrics/weighted_corrected_mean. Cache 3h."""
     key = f"incoming_series_7d:{pubkey}"
     now = int(time.time())
-    if key in cache and now - cache[key]["ts"] < 3*3600:
+    if key in cache and now - cache[key]["ts"] < AMBOSS_CACHE_TTL_SEC:
         return cache[key]["vals"]
 
     from_date = (now_utc() - datetime.timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
@@ -513,6 +524,99 @@ def amboss_seed_series_7d(pubkey, cache):
         return vals
     except Exception:
         return None
+
+def amboss_series_generic(pubkey: str, metric: str, submetric: str, cache: dict):
+    """
+    Busca uma série 7d de métricas do Amboss (qualquer submetric).
+    Retorna lista de floats (valores), com cache.
+    """
+    key = f"series7d:{metric}:{submetric}:{pubkey}"
+    now = int(time.time())
+    c = cache.get(key)
+    if c and now - c.get("ts", 0) < AMBOSS_CACHE_TTL_SEC:
+        return c.get("vals") or []
+
+    from_date = (now_utc() - datetime.timedelta(days=LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    q = {
+        "query": """
+        query GetNodeMetrics($from: String!, $metric: NodeMetricsKeys!, $pubkey: String!, $submetric: ChannelMetricsKeys) {
+          getNodeMetrics(pubkey: $pubkey) {
+            historical_series(from: $from, metric: $metric, submetric: $submetric)
+          }
+        }""",
+        "variables": {"from": from_date, "metric": metric, "pubkey": pubkey, "submetric": submetric}
+    }
+    headers = {"content-type":"application/json","Authorization": f"Bearer {AMBOSS_TOKEN}"}
+    try:
+        r = requests.post(AMBOSS_URL, headers=headers, json=q, timeout=20)
+        r.raise_for_status()
+        rows = (r.json()["data"]["getNodeMetrics"]["historical_series"] or [])
+        vals = [float(v[1]) for v in rows if v and len(v) == 2]
+        cache[key] = {"ts": now, "vals": vals}
+        return vals
+    except Exception:
+        return []
+
+def _avg(vals):
+    return (sum(vals)/len(vals)) if vals else None
+
+def _safe_div(a, b, default=1.0):
+    try:
+        if b and b != 0:
+            return a/b
+    except Exception:
+        pass
+    return default
+
+def build_enhanced_seed(pubkey: str, seed_base: float, cache: dict):
+    """
+    Ajusta o seed_base com:
+      - blend com mediana (incoming/median),
+      - penalidade por volatilidade (incoming/std vs mean),
+      - viés por ratio (outgoing/incoming) usando weighted_corrected_mean.
+    Retorna (seed_ajustado, debug_tags[list]).
+    """
+    if not (SEED_ADJUST_ENABLE and pubkey):
+        return float(seed_base), []
+
+    dbg = []
+
+    # a) incoming median / mean / std
+    inc_median = _avg(amboss_series_generic(pubkey, "incoming_fee_rate_metrics", "median", cache))
+    inc_mean   = _avg(amboss_series_generic(pubkey, "incoming_fee_rate_metrics", "mean", cache))
+    inc_std    = _avg(amboss_series_generic(pubkey, "incoming_fee_rate_metrics", "std", cache))
+
+    seed = float(seed_base)
+
+    # blend com mediana (mais robusto a outliers)
+    if inc_median:
+        seed = (1.0 - SEED_BLEND_MEDIAN_ALPHA) * seed + SEED_BLEND_MEDIAN_ALPHA * float(inc_median)
+        dbg.append("🔬med-blend")
+
+    # penalidade por volatilidade σ/μ
+    if inc_mean and inc_std and inc_mean > 0:
+        sigma_mu = max(0.0, float(inc_std) / float(inc_mean))
+        # penalidade ~ K * (σ/μ), clampada
+        pen = min(SEED_VOLATILITY_CAP, SEED_VOLATILITY_K * sigma_mu)
+        if pen > 0:
+            seed *= (1.0 - pen)
+            dbg.append(f"🔬volσ/μ-{pen*100:.0f}%")
+
+    # b) ratio = outgoing_weighted_corrected_mean / incoming_weighted_corrected_mean
+    inc_wcorr = _avg(amboss_series_generic(pubkey, "incoming_fee_rate_metrics",  "weighted_corrected_mean", cache))
+    out_wcorr = _avg(amboss_series_generic(pubkey, "outgoing_fee_rate_metrics", "weighted_corrected_mean", cache))
+
+    if inc_wcorr and out_wcorr:
+        ratio = _safe_div(float(out_wcorr), float(inc_wcorr), 1.0)
+        # fator ~ 1 + K*(ratio-1), com clamp
+        f = 1.0 + SEED_RATIO_K * (ratio - 1.0)
+        f = max(SEED_RATIO_MIN_FACTOR, min(SEED_RATIO_MAX_FACTOR, f))
+        if f != 1.0:
+            seed *= f
+            dbg.append(f"🔬ratio×{f:.2f}")
+
+    return float(seed), dbg
+
 
 def seed_with_guard(pubkey, cache, state, cid):
     """
@@ -849,6 +953,9 @@ def main(dry_run=False):
         seed_used, seed_raw, seed_p95, seed_flags = seed_with_guard(pubkey, cache, state, cid)
         if seed_used is None:
             seed_used = 200.0  # fallback
+            
+        # >>> ADD: seed híbrido (mediana/volatilidade/ratio)
+        seed_used, seed_adj_tags = build_enhanced_seed(pubkey, seed_used, cache)
 
         # Ponderação pelo volume de ENTRADA do peer
         if total_incoming_msat > 0 and VOLUME_WEIGHT_ALPHA > 0 and pubkey:
@@ -869,7 +976,19 @@ def main(dry_run=False):
             elif fl == "abs": seed_tags.append("🧬seedcap:abs")
         if not seed_flags and DEBUG_TAGS:
             seed_tags.append("🧬seedcap:none")
+            
+        # >>> ADD: tags de debug dos novos ajustes
+        if DEBUG_TAGS and seed_adj_tags:
+            seed_tags.extend(seed_adj_tags)
+        
+        # Debug: mostrar p65/p95 também
+        if DEBUG_TAGS:
+            if seed_raw is not None:
+                seed_tags.append(f"🧬p65:{int(seed_raw)}")
+            if seed_p95 is not None:
+                seed_tags.append(f"🧬p95:{int(seed_p95)}")
 
+            
         # persistir last_seed cedo (só se não for excl-dry e não for --dry-run)
         if (not dry_run) and (not is_excluded):
             st_tmp = state.get(cid, {}).copy()
@@ -1231,8 +1350,9 @@ def main(dry_run=False):
             diag_tags.append("🧲peg")
         if DEBUG_TAGS:
             diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
-        status_tags = []  # já foi montado acima; só para clareza de ordem
-        all_tags = class_tags + seed_tags + diag_tags
+        status_tags = status_tags  # já montado lá em cima (🟢on/🔴off)
+        all_tags = status_tags + class_tags + seed_tags + diag_tags
+
 
         # ====== MÍNIMO REAL: sanear local < MIN_PPM ======
         # Fazemos antes do gate de microupdate/cooldown.
@@ -1244,7 +1364,13 @@ def main(dry_run=False):
         new_ppm = final_ppm
 
         # Aplica/relata
-        seed_note = f"{int(seed_used)}" + (" (cap)" if seed_flags else "")
+        seed_note_parts = [str(int(seed_used))]
+        if seed_raw is not None:
+            seed_note_parts.append(f"p65:{int(seed_raw)}")
+        if seed_p95 is not None:
+            seed_note_parts.append(f"p95:{int(seed_p95)}")
+        seed_note = " ".join(seed_note_parts) + (" (cap)" if seed_flags else "")
+
         dir_for_emoji = "up" if new_ppm > local_ppm else ("down" if new_ppm < local_ppm else "flat")
         emo = "🔺" if dir_for_emoji == "up" else ("🔻" if dir_for_emoji == "down" else "⏸️")
 
@@ -1462,4 +1588,5 @@ if __name__ == "__main__":
         EXCL_DRY_VERBOSE = False
 
     main(dry_run=args.dry_run)
+
 
