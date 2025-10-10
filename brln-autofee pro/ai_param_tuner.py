@@ -78,9 +78,12 @@ DEFAULTS = {
     "NEG_MARGIN_SURGE_BUMP": 0.05,
 }
 
+# =========================
 # Anti-ratchet (higiene)
+# =========================
 MIN_HOURS_BETWEEN_CHANGES = 6
-REQUIRED_BAD_STREAK = 1   # reage já no 1º dia ruim
+# >>> v0.3.7: gate de tendência mais robusto (antes era 1)
+REQUIRED_BAD_STREAK = 2
 
 # Orçamento diário de variação ABSOLUTA por chave
 DAILY_CHANGE_BUDGET = {
@@ -100,6 +103,18 @@ DAILY_CHANGE_BUDGET = {
     "NEG_MARGIN_SURGE_BUMP": 0.03,
 }
 META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
+
+# =========================
+# Histerese & Agrupador (v0.3.7)
+# =========================
+# Histerese do alívio de floor-lock
+RELIEF_HYST_FLOORLOCK_MIN   = 120
+RELIEF_HYST_WINDOWS         = 3      # janelas consecutivas exigidas
+RELIEF_HYST_NEG_MARGIN_MIN  = 300    # alívio imediato se out_ppm - rebal_ppm <= -300
+
+# Agrupador de mudanças (anti-churn)
+DEFER_MIN_NORM_SUM          = 0.60   # ~60% do orçamento diário normalizado
+DEFER_MAX_HOURS             = 3      # ou após 3h de acúmulo
 
 # =========================
 # Versão centralizada (leitura do topo da lista)
@@ -156,6 +171,12 @@ def to_sqlite_str(dt):
         dt = dt.astimezone(datetime.timezone.utc).replace(tzinfo=None)
     return dt.isoformat(sep=' ', timespec='seconds')
 
+def margin_ppm(out_ppm, rebal_ppm):
+    """Margem de PPM (positiva = saudável)."""
+    if rebal_ppm <= 0:  # sem rebal de referência
+        return out_ppm
+    return out_ppm - rebal_ppm
+
 # =========================
 # KPIs e sintomas
 # =========================
@@ -203,6 +224,7 @@ def get_7d_kpis():
     }
     kpis["profit_sat"] = kpis["out_fee_sat"] - kpis["rebal_fee_sat"]
     kpis["profit_ppm_est"] = kpis["out_ppm7d"] - (kpis["rebal_cost_ppm7d"] if kpis["rebal_cost_ppm7d"]>0 else 0)
+    kpis["margin_ppm"] = margin_ppm(kpis["out_ppm7d"], kpis["rebal_cost_ppm7d"])
     return kpis
 
 def read_symptoms_from_logs():
@@ -241,7 +263,7 @@ def read_symptoms_from_logs():
     return counts
 
 # =========================
-# Lógica de ajuste (v0.3.4)
+# Lógica de ajuste (v0.3.7)
 # =========================
 EPS = 1e-6
 
@@ -260,17 +282,23 @@ def _set_change(changed, key, new_val, current_val):
 def _near_max(val, lo, hi, frac=0.95):
     return val >= (lo + frac*(hi - lo)) - 1e-12
 
-# === NOVO: teto suave p/ SURGE_BUMP_MAX ===
-def _surge_soft_cap(symptoms):
-    # libera teto global (0.50) quando floor_lock está muito alto; caso contrário, limita a 0.35
-    return LIMITS["SURGE_BUMP_MAX"][1] if symptoms.get("floor_lock", 0) >= 200 else 0.35
+# === v0.3.7: soft-cap inteligente p/ SURGE_BUMP_MAX ===
+def _surge_soft_cap(symptoms, kpis):
+    fl = symptoms.get("floor_lock", 0)
+    no_down = symptoms.get("no_down_low", 0)
+    profit_sat = kpis.get("profit_sat", 0)
+    if fl >= 200 and profit_sat <= 0 and no_down >= 10:
+        return LIMITS["SURGE_BUMP_MAX"][1]  # 0.50
+    return 0.35
 
 def adjust(overrides, kpis, symptoms):
     changed = {}
-    prof_sat = kpis["profit_sat"]
-    out_ppm  = kpis["out_ppm7d"]
-    rebal_ppm= kpis["rebal_cost_ppm7d"]
+    causes  = []  # v0.3.7: anota causas
+    prof_sat   = kpis["profit_sat"]
+    out_ppm    = kpis["out_ppm7d"]
+    rebal_ppm  = kpis["rebal_cost_ppm7d"]
     profit_ppm_est = kpis["profit_ppm_est"]
+    marg       = kpis["margin_ppm"]
 
     def get(k):
         return float(overrides.get(k, DEFAULTS.get(k))) if isinstance(DEFAULTS.get(k), (int,float)) else overrides.get(k, DEFAULTS.get(k))
@@ -300,86 +328,118 @@ def adjust(overrides, kpis, symptoms):
     else:
         bad_tier = "ok"
 
-    rebal_overpriced = (rebal_ppm >= out_ppm) or ((out_ppm - rebal_ppm) < 50)
+    rebal_overpriced = (rebal_ppm >= out_ppm) or (marg < 50)
 
     # ============================================================
-    # 1) Alívio de floor-lock (ANTES de qualquer push de pisos)
+    # 1) Alívio de floor-lock com histerese (ANTES do push)
     # ============================================================
     relief_applied = False
-    if symptoms.get("floor_lock", 0) >= 100 and profit_ppm_est < 0:
+    allow_relief = False
+    # Histerese: 3 janelas com floor_lock alto e lucro ppm negativo
+    # OU alívio imediato se a margem está <= -300 ppm
+    if marg <= -RELIEF_HYST_NEG_MARGIN_MIN:
+        allow_relief = True
+        causes.append("alivio_imediato_margem")
+    elif symptoms.get("floor_lock", 0) >= RELIEF_HYST_FLOORLOCK_MIN and profit_ppm_est < 0:
+        allow_relief = True  # condicionado à contagem no main (via meta, ver mais abaixo)
+
+    if allow_relief:
         new_rebal_floor = clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"])
         if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_floor, REBAL_FLOOR_MARGIN):
             REBAL_FLOOR_MARGIN = new_rebal_floor
             relief_applied = True
+            causes.append("alivio_floorlock")
 
     # ============================================================
     # 2) Plano A (push de pisos) — só se NÃO teve alívio nessa rodada
     # ============================================================
+    pushed_pisos = False
     if not relief_applied and (bad_tier in ("hard", "medium") and rebal_overpriced):
         incr = 1.0 if bad_tier == "hard" else 0.66
 
         new_out_floor = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         if _set_change(changed, "OUTRATE_FLOOR_FACTOR", new_out_floor, OUTRATE_FLOOR_FACTOR):
             OUTRATE_FLOOR_FACTOR = new_out_floor
+            pushed_pisos = True
 
         new_revfloor = int(clamp(REVFLOOR_MIN_PPM_ABS + 10*incr, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
         if _set_change(changed, "REVFLOOR_MIN_PPM_ABS", new_revfloor, REVFLOOR_MIN_PPM_ABS):
             REVFLOOR_MIN_PPM_ABS = new_revfloor
+            pushed_pisos = True
 
         new_rebal_m = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
         if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_m, REBAL_FLOOR_MARGIN):
             REBAL_FLOOR_MARGIN = new_rebal_m
+            pushed_pisos = True
 
         new_neg_surge = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
-        _set_change(changed, "NEG_MARGIN_SURGE_BUMP", new_neg_surge, NEG_MARGIN_SURGE_BUMP)
+        if _set_change(changed, "NEG_MARGIN_SURGE_BUMP", new_neg_surge, NEG_MARGIN_SURGE_BUMP):
+            pushed_pisos = True
+
+        if pushed_pisos:
+            causes.append("planoA_push_pisos")
 
     # ============================================================
     # 3) Regras existentes (mantidas)
     # ============================================================
     if symptoms.get("floor_lock", 0) >= 15 and bad_tier == "ok":
         new_rebal_floor = clamp(REBAL_FLOOR_MARGIN - 0.02, *LIMITS["REBAL_FLOOR_MARGIN"])
-        _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_floor, REBAL_FLOOR_MARGIN)
+        if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_floor, REBAL_FLOOR_MARGIN):
+            causes.append("alivio_suave_quando_ok")
 
     if symptoms.get("no_down_low", 0) >= 10:
-        _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP)
-        _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K)
-        # <<<<<<<<<<<<<< SOFT CAP APLICADO AQUI
-        _set_change(
+        if _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP):
+            pass
+        if _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K):
+            pass
+        # soft cap inteligente
+        if _set_change(
             changed,
             "SURGE_BUMP_MAX",
             clamp(
                 SURGE_BUMP_MAX + 0.03,
                 LIMITS["SURGE_BUMP_MAX"][0],
-                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms)),
+                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms, kpis)),
             ),
             SURGE_BUMP_MAX,
-        )
+        ):
+            causes.append("ajuste_surge_softcap")
 
     if (symptoms.get("no_down_low", 0) >= 10) and (profit_ppm_est < 0):
-        _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX)
+        if _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX):
+            pass
 
     if symptoms.get("hold_small", 0) >= 20 and prof_sat > 0:
-        _set_change(changed, "BOS_PUSH_MIN_ABS_PPM", int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"])), BOS_PUSH_MIN_ABS_PPM)
-        _set_change(changed, "BOS_PUSH_MIN_REL_FRAC", clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"]), BOS_PUSH_MIN_REL_FRAC)
+        if _set_change(changed, "BOS_PUSH_MIN_ABS_PPM", int(clamp(BOS_PUSH_MIN_ABS_PPM - 2, *LIMITS["BOS_PUSH_MIN_ABS_PPM"])), BOS_PUSH_MIN_ABS_PPM):
+            pass
+        if _set_change(changed, "BOS_PUSH_MIN_REL_FRAC", clamp(BOS_PUSH_MIN_REL_FRAC - 0.005, *LIMITS["BOS_PUSH_MIN_REL_FRAC"]), BOS_PUSH_MIN_REL_FRAC):
+            pass
 
     if symptoms.get("cb_trigger", 0) >= 8:
-        _set_change(changed, "STEP_CAP", clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"]), STEP_CAP)
-        _set_change(changed, "COOLDOWN_HOURS_DOWN", clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"]), COOLDOWN_DOWN)
-        _set_change(changed, "COOLDOWN_HOURS_UP", clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"]), COOLDOWN_UP)
+        if _set_change(changed, "STEP_CAP", clamp(STEP_CAP - 0.01, *LIMITS["STEP_CAP"]), STEP_CAP):
+            pass
+        if _set_change(changed, "COOLDOWN_HOURS_DOWN", clamp(COOLDOWN_DOWN + 2, *LIMITS["COOLDOWN_HOURS_DOWN"]), COOLDOWN_DOWN):
+            pass
+        if _set_change(changed, "COOLDOWN_HOURS_UP", clamp(COOLDOWN_UP + 1, *LIMITS["COOLDOWN_HOURS_UP"]), COOLDOWN_UP):
+            pass
+        causes.append("cb_conservador")
 
     if (prof_sat >= SAT_PROFIT_MIN and profit_ppm_est > -40 and symptoms.get("floor_lock", 0) >= 25):
-        _set_change(changed, "OUTRATE_FLOOR_FACTOR", clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"]), OUTRATE_FLOOR_FACTOR)
-        _set_change(changed, "REBAL_FLOOR_MARGIN", clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"]), REBAL_FLOOR_MARGIN)
+        if _set_change(changed, "OUTRATE_FLOOR_FACTOR", clamp(OUTRATE_FLOOR_FACTOR - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"]), OUTRATE_FLOOR_FACTOR):
+            pass
+        if _set_change(changed, "REBAL_FLOOR_MARGIN", clamp(REBAL_FLOOR_MARGIN - 0.01, *LIMITS["REBAL_FLOOR_MARGIN"]), REBAL_FLOOR_MARGIN):
+            pass
+        causes.append("afrouxar_quando_lucrando_com_floorlock")
 
     # Se houve alívio, não queremos empurrões de pisos nesta rodada:
     if relief_applied:
         for k in ("OUTRATE_FLOOR_FACTOR", "REVFLOOR_MIN_PPM_ABS", "REBAL_FLOOR_MARGIN"):
-            # preserva apenas o alívio já aplicado em REBAL_FLOOR_MARGIN
             if k != "REBAL_FLOOR_MARGIN":
                 changed.pop(k, None)
 
     # ============================================================
-    # 4) Plano B relaxado (surge/persistência): ativa com 2/3 ~no teto ou floor_lock alto
+    # 4) Plano B relaxado (surge/persistência)
+    #    ativa com 2/3 ~no teto ou floor_lock alto
     # ============================================================
     out_lo, out_hi = LIMITS["OUTRATE_FLOOR_FACTOR"]
     rev_lo, rev_hi = LIMITS["REVFLOOR_MIN_PPM_ABS"]
@@ -390,26 +450,35 @@ def adjust(overrides, kpis, symptoms):
     at_reb = _near_max(REBAL_FLOOR_MARGIN, reb_lo, reb_hi)
 
     if (bad_tier in ("hard", "medium")) and ((at_out + at_rev + at_reb) >= 2 or symptoms.get("floor_lock", 0) >= 200):
-        _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K)
-        # <<<<<<<<<<<<<< SOFT CAP APLICADO AQUI
-        _set_change(
+        planB = False
+        if _set_change(changed, "SURGE_K", clamp(SURGE_K + 0.05, *LIMITS["SURGE_K"]), SURGE_K):
+            planB = True
+        if _set_change(
             changed,
             "SURGE_BUMP_MAX",
             clamp(
                 SURGE_BUMP_MAX + 0.03,
                 LIMITS["SURGE_BUMP_MAX"][0],
-                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms)),
+                min(LIMITS["SURGE_BUMP_MAX"][1], _surge_soft_cap(symptoms, kpis)),
             ),
             SURGE_BUMP_MAX,
-        )
-        _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP)
+        ):
+            planB = True
+        if _set_change(changed, "PERSISTENT_LOW_BUMP", clamp(PERSISTENT_LOW_BUMP + 0.01, *LIMITS["PERSISTENT_LOW_BUMP"]), PERSISTENT_LOW_BUMP):
+            planB = True
         if profit_ppm_est < 0:
-            _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX)
+            if _set_change(changed, "PERSISTENT_LOW_MAX", clamp(PERSISTENT_LOW_MAX + 0.02, *LIMITS["PERSISTENT_LOW_MAX"]), PERSISTENT_LOW_MAX):
+                planB = True
+        if planB:
+            causes.append("planoB_relaxado")
 
-    return changed
+    if not causes and changed:
+        causes.append("ajustes_manuais_regra")
+
+    return changed, causes
 
 # =========================
-# Anti-ratchet helpers
+# Anti-ratchet helpers + Histerese/Defer
 # =========================
 def load_meta():
     try:
@@ -421,10 +490,24 @@ def load_meta():
                 meta.setdefault("good_streak", 0)
                 meta.setdefault("daily_budget", {})
                 meta.setdefault("last_day", None)
+                # v0.3.7 extras
+                meta.setdefault("hyst_relief_count", 0)
+                meta.setdefault("deferred", {})
+                meta.setdefault("deferred_started_ts", 0)
                 return meta
     except:
         pass
-    return {"last_change_ts": 0, "bad_streak": 0, "good_streak": 0, "daily_budget": {}, "last_day": None}
+    return {
+        "last_change_ts": 0,
+        "bad_streak": 0,
+        "good_streak": 0,
+        "daily_budget": {},
+        "last_day": None,
+        # v0.3.7
+        "hyst_relief_count": 0,
+        "deferred": {},
+        "deferred_started_ts": 0,
+    }
 
 def save_meta(meta):
     os.makedirs(os.path.dirname(META_PATH), exist_ok=True)
@@ -447,6 +530,21 @@ def update_good_streak(meta, prof_sat, profit_ppm_est):
         meta["good_streak"] = int(meta.get("good_streak", 0)) + 1
     else:
         meta["good_streak"] = 0
+
+def update_relief_hysteresis(meta, symptoms, kpis):
+    """Mantém contagem de janelas consecutivas elegíveis a alívio."""
+    cond = (symptoms.get("floor_lock", 0) >= RELIEF_HYST_FLOORLOCK_MIN and kpis.get("profit_ppm_est", 0) < 0)
+    if cond:
+        meta["hyst_relief_count"] = int(meta.get("hyst_relief_count", 0)) + 1
+    else:
+        meta["hyst_relief_count"] = 0
+
+def can_apply_relief_now(meta, kpis):
+    # alívio imediato se margem muito negativa
+    if kpis.get("margin_ppm", 0) <= -RELIEF_HYST_NEG_MARGIN_MIN:
+        return True
+    # ou após RELIEF_HYST_WINDOWS consecutivas de floor_lock alto e lucro ppm negativo
+    return int(meta.get("hyst_relief_count", 0)) >= RELIEF_HYST_WINDOWS
 
 def rollover_daily_budget_if_needed(meta):
     """Garante reset do budget diário, mesmo sem alterações propostas/aplicadas."""
@@ -548,6 +646,58 @@ def explain_discarded_changes(cur, pre, post, meta):
         reasons[k] = "filtered"
     return reasons
 
+# ---------- Agrupador (anti-churn) ----------
+def _normalized_budget_sum(cur, proposed):
+    """Soma normalizada dos deltas propostos em relação ao budget diário."""
+    total = 0.0
+    for k, new_abs in proposed.items():
+        try:
+            old = float(cur.get(k, DEFAULTS.get(k)))
+            newv = float(new_abs)
+        except Exception:
+            continue
+        delta = abs(newv - old)
+        b = DAILY_CHANGE_BUDGET.get(k, None)
+        if b and b > 0:
+            total += min(delta / b, 1.0)
+        else:
+            # sem budget definido, considera delta como contribuição cheia
+            total += 1.0
+    return total
+
+def apply_deferred_aggregator(cur, proposed, meta):
+    """
+    Acumula pequenas mudanças e só deixa gravar quando:
+      - soma normalizada de deltas >= DEFER_MIN_NORM_SUM, ou
+      - passaram DEFER_MAX_HOURS desde o início do acúmulo.
+    """
+    if not proposed:
+        return proposed, False  # nada a fazer
+
+    now = int(time.time())
+    deferred = dict(meta.get("deferred", {}))
+    started = int(meta.get("deferred_started_ts", 0))
+
+    # mescla: proposta atual tem precedência como novo target
+    for k, v in proposed.items():
+        deferred[k] = v
+
+    # calcula se já dá para liberar
+    norm_sum = _normalized_budget_sum(cur, deferred)
+    time_ok = (started > 0) and ((now - started) / 3600.0 >= DEFER_MAX_HOURS)
+
+    if norm_sum >= DEFER_MIN_NORM_SUM or time_ok:
+        # libera pacote acumulado
+        meta["deferred"] = {}
+        meta["deferred_started_ts"] = 0
+        return deferred, True
+    else:
+        # continua acumulando
+        if started == 0:
+            meta["deferred_started_ts"] = now
+        meta["deferred"] = deferred
+        return {}, False
+
 # =========================
 # Telegram helpers (hard-coded)
 # =========================
@@ -587,7 +737,7 @@ def fmt_num(n, zero_dash=False):
     except Exception:
         return str(n)
 
-def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked, discard_reasons=None):
+def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked, discard_reasons=None, causes=None, deferred_note=None):
     v = version_info.get("version","0.0.0")
     vdesc = version_info.get("desc","")
     header_icon = "🧪" if dry_run else "🔧"
@@ -602,7 +752,8 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         f"• ppm_out=<code>{fmt_num(kpis.get('out_ppm7d',0.0))}</code> | "
         f"ppm_rebal=<code>{fmt_num(kpis.get('rebal_cost_ppm7d',0.0))}</code> | "
         f"profit_sat=<code>{fmt_num(kpis.get('profit_sat',0))}</code> | "
-        f"profit_ppm≈<code>{fmt_num(kpis.get('profit_ppm_est',0.0))}</code>"
+        f"profit_ppm≈<code>{fmt_num(kpis.get('profit_ppm_est',0.0))}</code> | "
+        f"margin≈<code>{fmt_num(kpis.get('margin_ppm',0.0))}</code>"
     )
 
     sy = (
@@ -625,6 +776,16 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
 
     cooldown = "• <b>Cooldown</b>: ⏳ bloqueado nesta janela (sem bypass)." if cooldown_blocked else "• <b>Cooldown</b>: ok"
     streak_line = f"• <b>Streak</b>: bad={meta.get('bad_streak',0)}/{REQUIRED_BAD_STREAK} | good={meta.get('good_streak',0)}/{REQUIRED_GOOD_STREAK}"
+
+    # Causas
+    cause_line = ""
+    if causes:
+        cause_line = "• <b>Causa</b>: " + ", ".join(causes)
+
+    # Defer note
+    defer_line = ""
+    if deferred_note:
+        defer_line = f"• <b>Defer</b>: {deferred_note}"
 
     if proposed:
         ch_lines = []
@@ -651,7 +812,9 @@ def build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dr
         f"{sy}\n"
         f"{budget}\n"
         f"{cooldown}\n"
-        f"{streak_line}\n\n"
+        f"{streak_line}\n"
+        f"{cause_line}\n"
+        f"{defer_line}\n\n"
         f"{changes}\n"
         f"• file: <code>{OVERRIDES}</code>\n"
     )
@@ -678,16 +841,37 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
     # === garantir rollover diário do budget SEMPRE
     rollover_daily_budget_if_needed(meta)
 
+    # Streaks e histerese
     update_bad_streak(meta, kpis.get("profit_ppm_est", 0.0))
     update_good_streak(meta, kpis.get("profit_sat", 0), kpis.get("profit_ppm_est", 0.0))
+    update_relief_hysteresis(meta, symptoms, kpis)
 
     proposed = {}
     cooldown_blocked = False
     discard_reasons = {}
+    causes = []
+    deferred_note = None
 
     if meta["bad_streak"] >= REQUIRED_BAD_STREAK:
-        proposed = adjust(cur, kpis, symptoms)
-        proposed = apply_limits(proposed)
+        # Checagem de histerese de alívio antes do adjust: se NÃO pode aliviar agora, removemos a
+        # possibilidade de alívio dessa rodada (evitando micro passos em sequência).
+        can_relief = can_apply_relief_now(meta, kpis)
+
+        proposed_raw, causes = adjust(cur, kpis, symptoms)
+
+        # Se não pode aliviar ainda, remova alívios propostos por adjust
+        if not can_relief and "REBAL_FLOOR_MARGIN" in proposed_raw:
+            # Só bloqueia se o movimento for de alívio (redução)
+            try:
+                if float(proposed_raw["REBAL_FLOOR_MARGIN"]) < float(cur.get("REBAL_FLOOR_MARGIN", DEFAULTS["REBAL_FLOOR_MARGIN"])):
+                    proposed_raw.pop("REBAL_FLOOR_MARGIN", None)
+                    if "alivio_floorlock" in causes:
+                        causes.remove("alivio_floorlock")
+                    causes.append("bloqueado_histerese")
+            except Exception:
+                pass
+
+        proposed = apply_limits(proposed_raw)
 
         prof_sat = kpis.get("profit_sat", 0)
         profit_ppm_est = kpis.get("profit_ppm_est", 0)
@@ -705,7 +889,17 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         if pre_budget and not proposed:
             discard_reasons = explain_discarded_changes(cur, pre_budget, proposed, meta)
 
-        if verbose and proposed:
+        # >>> v0.3.7: agrupador anti-churn (após budget; antes de cooldown/commit)
+        if proposed:
+            aggregated, released = apply_deferred_aggregator(cur, proposed, meta)
+            if released:
+                proposed = aggregated
+                deferred_note = "pacote liberado (norm>=60% ou ≥3h)"
+            else:
+                proposed = {}
+                deferred_note = "acumulando pequenas mudanças"
+
+        if verbose and meta.get("daily_budget"):
             print("[budget] uso hoje:", meta.get("daily_budget", {}))
 
         bypass_cooldown = severe_bad and too_many_floorlocks
@@ -717,7 +911,10 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
                 print("Changes (bloqueado por cooldown temporal):", proposed)
                 print(f"[info] aguardando {MIN_HOURS_BETWEEN_CHANGES}h entre alterações.")
             if (force_telegram or (tg_enabled() and not no_telegram)):
-                tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=True, discard_reasons=discard_reasons)
+                tg_msg = build_tg_message(
+                    version_info, now_local, kpis, symptoms, proposed, meta, dry_run,
+                    cooldown_blocked=True, discard_reasons=discard_reasons, causes=causes, deferred_note=deferred_note
+                )
                 tg_send(tg_msg)
             save_meta(meta)
             return
@@ -728,7 +925,10 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
             print("Changes:", {})
             print(f"[info] tendência insuficiente (bad_streak={meta['bad_streak']}/{REQUIRED_BAD_STREAK}).")
         if (force_telegram or (tg_enabled() and not no_telegram)):
-            tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, {}, meta, dry_run, cooldown_blocked=False, discard_reasons=discard_reasons)
+            tg_msg = build_tg_message(
+                version_info, now_local, kpis, symptoms, {}, meta, dry_run,
+                cooldown_blocked=False, discard_reasons=discard_reasons, causes=["gate_tendencia"], deferred_note=None
+            )
             tg_send(tg_msg)
         save_meta(meta)
         return
@@ -743,6 +943,8 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
         if "PERSISTENT_LOW_MAX" not in proposed and new_plmax != plmax:
             proposed["PERSISTENT_LOW_MAX"] = new_plmax
+        if proposed:
+            causes.append("afrouxar_por_good_streak")
 
     if verbose:
         print("KPIs 7d:", kpis)
@@ -750,9 +952,14 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         print("Changes:", proposed if proposed else {})
         if not proposed and discard_reasons:
             print("[info] propostas descartadas:", discard_reasons)
+        if meta.get("deferred"):
+            print("[defer] acumulando:", meta["deferred"])
 
     if (force_telegram or (tg_enabled() and not no_telegram)):
-        tg_msg = build_tg_message(version_info, now_local, kpis, symptoms, proposed, meta, dry_run, cooldown_blocked=False, discard_reasons=discard_reasons)
+        tg_msg = build_tg_message(
+            version_info, now_local, kpis, symptoms, proposed, meta, dry_run,
+            cooldown_blocked=False, discard_reasons=discard_reasons, causes=causes, deferred_note=deferred_note
+        )
         tg_send(tg_msg)
 
     if not dry_run and proposed:
@@ -777,4 +984,5 @@ if __name__ == "__main__":
     ap.add_argument("--no-telegram", action="store_true", help="Não envia mensagem no Telegram.")
     args = ap.parse_args()
     main(dry_run=args.dry_run, verbose=True, force_telegram=args.telegram, no_telegram=args.no_telegram)
+
 
