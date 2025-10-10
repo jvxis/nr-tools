@@ -823,6 +823,11 @@ def main(dry_run=False):
     for cid_k in set(list(perchan_value_sat.keys()) + list(rebal_cost_ppm_by_chan.keys())):
         if perchan_value_sat.get(cid_k, 0) >= REBAL_PERCHAN_MIN_VALUE_SAT:
             rebal_cost_ppm_by_chan_use[cid_k] = rebal_cost_ppm_by_chan.get(cid_k, 0)
+    # --- Margem global 7d (para travas defensivas)
+    out_ppm_total = ppm(sum(out_fee_sat.values()), sum(out_amt_sat.values()))
+    neg_margin_global = (
+        bool(rebal_cost_ppm_global) and bool(out_ppm_total) and out_ppm_total < rebal_cost_ppm_global
+        )
 
     # ==== SHARDING SLOT ====
     now_ts = int(time.time())
@@ -940,7 +945,8 @@ def main(dry_run=False):
 
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
-
+        # Flag local para marcar se aplicamos o lock global
+        global_neg_lock_applied = False
         # in/out por canal p/ classificação
         in_amt      = in_amt_sat_by_cid.get(cid, 0)
         in_count    = in_count_by_cid.get(cid, 0)
@@ -1195,6 +1201,15 @@ def main(dry_run=False):
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
             cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
+        # === Travamento quando a operação 7d está negativa ===
+        # Se a margem global 7d está negativa, não deixe cair taxa (exceto discovery/new-inbound)
+        # e aumente um pouco a reatividade para SUBIR.
+        if neg_margin_global:
+            if (target < local_ppm) and (not discovery_hit) and (not new_inbound):
+                target = local_ppm  # cancela a queda
+                global_neg_lock_applied = True
+            # Mais fôlego para subir quando o global está no vermelho
+            cap_frac = max(cap_frac, STEP_CAP + 0.05)
 
         # Extreme drain mode — acelera SUBIDAS
         if EXTREME_DRAIN_ENABLE:
@@ -1321,6 +1336,8 @@ def main(dry_run=False):
 
         # Diagnóstico
         diag_tags = []
+        if global_neg_lock_applied:
+            diag_tags.append("🛡️global-neg-lock")
         if raw_step_ppm != target:
             dir_same = ((target > local_ppm and raw_step_ppm > local_ppm) or
                         (target < local_ppm and raw_step_ppm < local_ppm))

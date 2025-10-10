@@ -71,10 +71,10 @@ MIN_REBAL_COUNT     = 3        # e pelo menos 3 rebalances
 # Cooldown mínimo entre trocas de ON/OFF (dwell time)
 MIN_DWELL_HOURS = 1
 
-# >>> NOVO: habilita o bypass de cooldown para desligar imediatamente em condições seguras
+# >>> habilita o bypass de cooldown para desligar imediatamente em condições seguras
 FAST_OFF_ENABLE = True
 
-# >>> NOVO: kill-switch ultra-raro enquanto fill-lock está ativo (proteção de lucro)
+# >>> kill-switch ultra-raro enquanto fill-lock está ativo (proteção de lucro)
 KILL_SWITCH_ENABLE   = True
 KILL_COST_PPM        = 1500   # se custo global >= isso, permitimos OFF mesmo no fill-lock
 KILL_PRICE_HARD      = True   # se price-gate reprovar durante fill, permitimos OFF
@@ -99,6 +99,20 @@ def demand_bonus(baseline_fwds: int) -> float:
         return 0.04   # +4pp
     return 0.00
 
+# ===== ROI-CAP MELHORADO =====
+# Fator "custo_7d <= frac * preco" por classe
+ROI_CAP_FRAC_DEFAULT = 0.70
+ROI_CAP_FRAC_BY_CLASS = {
+    "sink":   0.85,   # mais permissivo em sinks
+    "router": 0.70,
+    "unknown":0.70,
+    "source": 0.70,   # não liga AR de qualquer forma, mas mantemos por completude
+}
+ROI_SINK_BASELINE_MIN = 50     # só aplica 0.85 se baseline>=50
+# Quando muito drenado, usar o preço = local_ppm (não o min(local, seed))
+ROI_USE_LOCAL_WHEN_DRAINED = True
+ROI_DRAIN_OUT_MAX = 0.12       # “muito drenado” < 12% outbound
+
 # ===== Exclusões: exatamente como você colou =====
 EXCLUSION_LIST = [
 #'891080507132936203', #LNBig Edge3 16M
@@ -110,10 +124,6 @@ FORCE_SOURCE_LIST = set([
     #"982400445448257541", # Aldebaran
     #"982400445448257545"  # TennisNbtc
 ])
-
-# =========================
-# Utilidades
-# =========================
 
 # =========================
 # Utilidades
@@ -426,6 +436,41 @@ def profitable(local_ppm: int, remote_ppm: int,
            f"🧮 custo_7d({fonte}) {int(base_cost)}ppm × {REBAL_SAFETY:.2f} + {int(BREAKEVEN_BUFFER*100)}% ≈ {need}ppm")
     return ok, mot
 
+def _roi_cap_frac_for(cls: str, baseline: int) -> float:
+    frac = ROI_CAP_FRAC_BY_CLASS.get(cls, ROI_CAP_FRAC_DEFAULT)
+    # só dá o “bônus” de 0.85 para sink com demanda mínima
+    if cls == "sink" and baseline < ROI_SINK_BASELINE_MIN:
+        frac = ROI_CAP_FRAC_DEFAULT
+    return float(frac)
+
+def roi_cap_ok(local_ppm: int,
+               seed_last: Optional[float],
+               base_cost_ppm: Optional[float],
+               cls: str,
+               baseline: int,
+               out_ratio: float) -> Tuple[bool, str]:
+    """
+    Gate de ROI (cap): autoriza AR se custo_7d <= frac * preço.
+    - frac depende da classe (sinks bons: até 85%).
+    - preço = min(local_ppm, seed_last), mas se muito drenado e habilitado, preço = local_ppm.
+    Se não houver amostra de custo, considera OK (não bloqueia).
+    """
+    base = float(base_cost_ppm or 0.0)
+    if base <= 0:
+        return True, "📉 roi-cap: sem amostra de custo_7d (ok por padrão)"
+    # preço de referência
+    if ROI_USE_LOCAL_WHEN_DRAINED and out_ratio < ROI_DRAIN_OUT_MAX:
+        peg = int(local_ppm)
+        peg_src = "local"
+    else:
+        peg = int(min(int(local_ppm), int(seed_last) if seed_last else int(local_ppm)))
+        peg_src = "min(local,seed)"
+    frac = _roi_cap_frac_for(cls, baseline)
+    cap = frac * float(peg)
+    ok = base <= cap
+    mot = f"📉 roi-cap: custo_7d {int(base)}ppm {'≤' if ok else '>'} {int(frac*100)}% de preço[{peg_src}]({peg}ppm) → {int(cap)}ppm"
+    return ok, mot
+
 def price_gate_ok(local_ppm: int, remote_ppm: int, ar_max_cost: float) -> Tuple[bool, str]:
     """
     Gate ‘primeiro princípio’: mesmo no teto de custo do AR (ar_max_cost%),
@@ -471,29 +516,31 @@ def hysteresis_decision(out_ratio: float, tgt_out_pct: int, current_on: bool, ca
         if (r >= high) and can_profit:
             return False, f"🔻 desliga: acima do alvo+his ({r:.2f} ≥ {high:.2f})"
         if not can_profit:
-            return False, f"🔻 desliga: não lucrativo pelo custo_7d"
+            return False, f"🔻 desliga: não lucrativo pelo custo_7d/roi"
         return None, "⏸️ mantém: dentro da faixa de histerese"
     else:
         # drenado o suficiente? (usa limiar do AutoFee para ‘re-ligar’)
         if (r <= religa_out_thresh) and can_profit:
             return True, f"🔺 liga: drenado (≤ {religa_out_thresh:.2f}) e lucrativo"
         if not can_profit:
-            return None, "🚫 não liga: margem não cobre custo_7d"
+            return None, "🚫 não liga: margem/roi não cobre custo_7d"
         return None, "⏸️ não liga: dentro da faixa de histerese"
 
-# >>> NOVO: helper para ignorar cooldown apenas para DESLIGAR em condições seguras
+# >>> helper para ignorar cooldown apenas para DESLIGAR em condições seguras
 def bypass_dwell_for_off(ar_current: bool,
                          proposed_toggle: Optional[bool],
                          out_ratio: float,
                          tgt_out_pct: int,
                          price_ok: bool,
                          prof_ok: bool,
+                         roi_ok: bool,
                          fill_lock_active: bool) -> bool:
     """
     Permite desligar imediatamente (ignora cooldown) se:
       - já encheu acima do alvo+his, OU
       - price-gate reprovado, OU
-      - lucro 7d insuficiente,
+      - lucro 7d insuficiente, OU
+      - roi-cap reprovado,
     e não estamos em fill-lock (ou seja, não estamos deliberadamente enchendo).
     """
     if not FAST_OFF_ENABLE:
@@ -503,7 +550,7 @@ def bypass_dwell_for_off(ar_current: bool,
     if fill_lock_active:
         return False
     high = (tgt_out_pct + HYSTERESIS_PP) / 100.0
-    if (out_ratio >= high) or (not price_ok) or (not prof_ok):
+    if (out_ratio >= high) or (not price_ok) or (not prof_ok) or (not roi_ok):
         return True
     return False
 
@@ -544,7 +591,7 @@ async def main():
         msgs: List[str] = []
         now = now_ts()
 
-        # >>> contadores para o header
+        # contadores para o header
         cnt_on = 0
         cnt_off = 0
         cnt_target = 0
@@ -590,42 +637,52 @@ async def main():
             use_ch_cost = (ch_cost_raw is not None and ch_cost_raw > 0 and ch_val_sat >= MIN_REBAL_VALUE_SAT and ch_cnt >= MIN_REBAL_COUNT)
             ch_cost = ch_cost_raw if use_ch_cost else None
 
-            # Gates de decisão
+            # Gates de decisão (preço, lucro e ROI-cap)
             price_ok, price_mot = price_gate_ok(local_ppm, remote_ppm, ar_max_cost)
             prof_ok,  prof_mot  = profitable(local_ppm, remote_ppm, ch_cost, global_cost_ppm)
 
-            # ---------- FILL-LOCK: se estamos enchendo, travar alvo e manter AR ON até atingir o alvo ----------
+            base_cost_used = ch_cost if (ch_cost is not None and ch_cost > 0) else (global_cost_ppm or 0.0)
+            roi_ok, roi_mot = roi_cap_ok(
+                local_ppm=local_ppm,
+                seed_last=seed_last,
+                base_cost_ppm=base_cost_used,
+                cls=cls_eff,
+                baseline=baseline,
+                out_ratio=out_r
+            )
+
+            # ---------- FILL-LOCK ----------
             fill_lock_active = False
             locked_out_tgt = out_tgt
             if cls_eff != "source" and ar_current:
                 if out_r < (out_tgt / 100.0):
                     fill_lock_active = True
                     locked_out_tgt = max(out_tgt, int(math.ceil(out_r * 100)))
-                    # enquanto não atingiu o alvo: não permitir desligar por preço/custo (apenas informativo)
+                    # enquanto não atingiu o alvo: não permitir desligar por preço/custo/roi (apenas informativo)
                     price_mot = price_mot + " | 🔒 fill-lock ignora price-gate até atingir alvo"
                     prof_mot  = prof_mot  + " | 🔒 fill-lock ignora custo_7d até atingir alvo"
+                    roi_mot   = roi_mot   + " | 🔒 fill-lock ignora roi-cap até atingir alvo"
 
-                    # >>> NOVO: kill-switch ultra-raro (proteção de lucro) durante fill-lock
+                    # kill-switch (proteção)
                     if KILL_SWITCH_ENABLE:
                         hard_cost_fail = (global_cost_ppm or 0) >= KILL_COST_PPM
                         hard_price_fail = (not price_ok) if KILL_PRICE_HARD else False
                         if hard_cost_fail or hard_price_fail:
-                            # libera decisão normal (permite OFF se histerese/condições mandarem)
                             fill_lock_active = False
                             reason = "custo_global_alto" if hard_cost_fail else "price_gate_reprovado"
                             log_append({"type":"kill_switch_release", "cid": cid, "alias": alias, "reason": reason, "global_cost_ppm": int(global_cost_ppm or 0)})
-                            # adiciona nota no motivo
                             price_mot = price_mot + " | 🧯 kill-switch liberou fill-lock"
                             prof_mot  = prof_mot  + " | 🧯 kill-switch liberou fill-lock"
+                            roi_mot   = roi_mot   + " | 🧯 kill-switch liberou fill-lock"
 
-            # ---------- CAP-LOCK: se o novo alvo ficou menor do que o out_ratio atual, suba o alvo para o out_ratio ----------
+            # ---------- CAP-LOCK ----------
             cap_lock_active = False
             cap_locked_out_tgt = out_tgt
             if cls_eff != "source" and (out_r > (out_tgt / 100.0)):
                 cap_lock_active = True
                 cap_locked_out_tgt = int(math.ceil(out_r * 100))
 
-            # 2) histerese / re-liga drenado — respeitando fill-lock, cap-lock e política de source
+            # 2) histerese / re-liga drenado
             toggle: Optional[bool] = None
             hys_mot = ""
             if cls_eff == "source":
@@ -643,18 +700,25 @@ async def main():
                         out_ratio=out_r,
                         tgt_out_pct=out_tgt,
                         current_on=ar_current,
-                        can_profit=prof_ok,
+                        can_profit=(prof_ok and roi_ok),
                         cls=cls_eff,
                         religa_out_thresh=religa_out_thresh,
                         baseline=baseline
                     )
+                    # Se ROI-cap reprovou e ainda não definimos toggle explicitamente:
+                    if toggle is None and not roi_ok:
+                        if ar_current:
+                            toggle = False
+                            hys_mot = "🔻 desliga: roi-cap reprovado (custo_7d muito alto vs preço de venda)"
+                        else:
+                            hys_mot = "🚫 não liga: roi-cap reprovado (custo_7d muito alto vs preço de venda)"
 
             # 3) cooldown mínimo entre trocas
             if toggle is not None:
                 last_sw = get_last_switch(state_af, cid) or 0
                 hours_since = (now - last_sw)/3600 if last_sw else 999
                 if hours_since < MIN_DWELL_HOURS:
-                    # >>> FAST-OFF: ignora cooldown para DESLIGAR em condições seguras
+                    # FAST-OFF: ignora cooldown para DESLIGAR em condições seguras
                     if bypass_dwell_for_off(
                         ar_current=ar_current,
                         proposed_toggle=toggle,
@@ -662,6 +726,7 @@ async def main():
                         tgt_out_pct=out_tgt,
                         price_ok=price_ok,
                         prof_ok=prof_ok,
+                        roi_ok=roi_ok,
                         fill_lock_active=fill_lock_active
                     ):
                         hys_mot = (hys_mot + " | ⚡ fast-off: ignorando cooldown").strip()
@@ -711,6 +776,7 @@ async def main():
                     bits.append(f"🎛️ bias={bias_pp_dbg:+.0f}pp (ema)")
                     bits.append(price_mot)                 # 🔒 price-gate
                     bits.append(prof_mot)                  # 💵 vs 🧮
+                    bits.append(roi_mot)                   # 📉 roi-cap
                     if hys_mot:
                         bits.append(hys_mot)               # 🔺/🔻/⏳/🚫/🔒/⚡
                     if cap_lock_active and not fill_lock_active:
@@ -759,6 +825,7 @@ async def main():
                         "action": action_txt,
                         "price_gate_ok": price_ok,
                         "profitable": prof_ok,
+                        "roi_cap_ok": roi_ok,
                         "class": cls_eff,
                         "baseline": baseline,
                         "used_cost": ("channel" if use_ch_cost else "global"),
@@ -792,6 +859,7 @@ async def main():
                         f"{' (source 5/95)' if cls_eff=='source' else lock_tag}\n"
                         f"• 🔎 motivo: {price_gate_ok(local_ppm, remote_ppm, ar_max_cost)[1]} | "
                         f"{profitable(local_ppm, remote_ppm, ch_cost, global_cost_ppm)[1]} | "
+                        f"{roi_cap_ok(local_ppm, seed_last, (ch_cost if (ch_cost is not None and ch_cost > 0) else (global_cost_ppm or 0.0)), cls_eff, baseline, out_r)[1]} | "
                         f"⚙️ Low Outbound = {religa_out_thresh:.2f} | 🎛️ bias={bias_pp_dbg:+.0f}pp (ema)"
                     )
                     msgs.append(txt)
@@ -809,7 +877,7 @@ async def main():
                     msgs.append(err)
                     log_append({"type":"error","cid":cid,"alias":alias,"error":str(e)})
 
-            # >>> NOVO: telemetria de por que não houve toggle (somente quando nada foi trocado)
+            # telemetria de por que não houve toggle (somente quando nada foi trocado)
             if toggle is None:
                 reasons = []
                 if cls_eff == "source":
@@ -820,6 +888,8 @@ async def main():
                     reasons.append("price-gate")
                 if not prof_ok:
                     reasons.append("no-profit")
+                if not roi_ok:
+                    reasons.append("roi-cap")
                 # r vs thresholds (religa)
                 low = (out_tgt - HYSTERESIS_PP)/100.0
                 if out_r > max(low, religa_out_thresh):
