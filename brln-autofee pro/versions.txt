@@ -1,3 +1,4 @@
+0.3.8 - Autofee com Previsão de Tendência por Canal e melhorias Rebal Trigger
 0.3.7 - Melhorias Ai Tuner
 0.3.6 - Melhorias Autofee e Trigger Rebal maximizar lucro
 0.3.5 - Mais parametros do Amboss para tune do seed

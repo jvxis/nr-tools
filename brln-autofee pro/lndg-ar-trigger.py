@@ -678,7 +678,7 @@ async def main():
             # ---------- CAP-LOCK ----------
             cap_lock_active = False
             cap_locked_out_tgt = out_tgt
-            if cls_eff != "source" and (out_r > (out_tgt / 100.0)):
+            if cls_eff != "source" and (out_r > ((out_tgt / 100.0) + 1e-6)):
                 cap_lock_active = True
                 cap_locked_out_tgt = int(math.ceil(out_r * 100))
 
@@ -739,7 +739,9 @@ async def main():
             if toggle is not None:
                 payload["auto_rebalance"] = toggle
 
+            # ⚠️ Recalcule sempre lock_tag aqui, imediatamente antes de definir targets:
             if fill_lock_active:
+                # use o valor já calculado no fill-lock
                 desired_out_target = locked_out_tgt
                 lock_tag = " (fill-lock)"
             elif cap_lock_active:
@@ -749,10 +751,16 @@ async def main():
                 desired_out_target = out_tgt
                 lock_tag = ""
 
+            # Se por arredondamento o desired_out_target ficar igual ao out_tgt,
+            # não chame de cap-lock; MAS NÃO LIMPE durante fill-lock.
+            if (desired_out_target == out_tgt) and (not fill_lock_active):
+                lock_tag = ""
+
+            # Enviar targets se necessário
             if out_t_cur != desired_out_target:
                 payload["ar_out_target"] = desired_out_target
-            if in_t_cur  != in_tgt:
-                payload["ar_in_target"]  = in_tgt
+            if in_t_cur != in_tgt:
+                payload["ar_in_target"] = in_tgt
 
             did_change = False
             if payload:
@@ -763,11 +771,11 @@ async def main():
 
                     if "auto_rebalance" in payload:
                         set_last_switch(state_af, cid, bool(payload["auto_rebalance"]))
-                    
+
                     # Estado do AR após esta atualização (se não veio no payload, mantém o atual)
                     ar_state_after = payload.get("auto_rebalance", ar_current)
                     ar_state_txt = "ON" if ar_state_after else "OFF"
-                    
+
                     # debug do bias aplicado
                     bias_pp_dbg = get_bias_pp_from_state(state_af, cid, cls_eff)
 
@@ -845,6 +853,19 @@ async def main():
             # alvo mudou mas AR não? ainda assim setamos target e logamos
             if (not did_change) and (out_t_cur != desired_out_target or in_t_cur != in_tgt):
                 try:
+                    # ⚠️ Recalcule lock_tag aqui também, para o caso de ramificação diferente do bloco anterior
+                    if fill_lock_active:
+                        desired_out_target = locked_out_tgt
+                        lock_tag = " (fill-lock)"
+                    elif (cls_eff != "source") and (out_r > ((out_tgt / 100.0) + 1e-6)):
+                        desired_out_target = int(math.ceil(out_r * 100))
+                        lock_tag = " (🧷 cap-lock)"
+                    else:
+                        desired_out_target = out_tgt
+                        lock_tag = ""
+                    if (desired_out_target == out_tgt) and (not fill_lock_active):
+                        lock_tag = ""
+
                     await update_channel(session, cid, {"ar_out_target": desired_out_target, "ar_in_target": in_tgt})
                     changes += 1
                     cnt_target += 1

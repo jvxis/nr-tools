@@ -676,6 +676,48 @@ def fmt_duration(secs):
     if m and not d: parts.append(f"{m}m")
     return " ".join(parts) if parts else "0m"
 
+
+def build_prediction(out_ratio, margin_ppm_7d, target, local_ppm, new_ppm, fwd_count, neg_margin_global, discovery_hit, cooldown_needed_hours=None):
+    """
+    Retorna uma string curta de previsão para o Telegram.
+    Regras intuitivas:
+      - Canal drenado e margem negativa -> tende a manter/subir (proteger ROI).
+      - Liquidez melhorando e margem positiva -> tende a reduzir.
+      - Discovery ativo com queda -> tende a reduzir mais rápido.
+      - Ociosidade (sem forwards e muita liquidez) -> tende a reduzir.
+      - Caso geral: usa sinal do alvo vs taxa atual para orientar.
+    """
+    try:
+        # 1) drenado & prejuízo => segurar ou subir
+        if out_ratio < 0.05 and (margin_ppm_7d < 0 or neg_margin_global):
+            return "🔮 previsão: manter ou subir (drenado e margem negativa; protegendo ROI do rebal)."
+
+        # 2) liquidez melhora & margem positiva => reduzir
+        if out_ratio > 0.10 and margin_ppm_7d > 0:
+            return "🔮 previsão: reduzir taxa nas próximas rodadas (liquidez subindo e margem positiva)."
+
+        # 3) discovery ativo e direção é queda => reduzir mais rápido
+        if discovery_hit and new_ppm < local_ppm:
+            return "🔮 previsão: reduzir mais rápido (modo discovery ativo)."
+
+        # 4) ociosidade: sem forwards e muita liquidez => reduzir
+        if fwd_count == 0 and out_ratio > 0.60:
+            return "🔮 previsão: reduzir (ocioso com liquidez sobrando)."
+
+        # 5) fallback: use relação alvo vs atual
+        if target > local_ppm and new_ppm >= local_ppm:
+            # Se houver cooldown e ele for maior que 0, informe tendência após janela
+            if cooldown_needed_hours and cooldown_needed_hours > 0:
+                return f"🔮 previsão: viés de alta após cooldown (~{int(cooldown_needed_hours)}h)."
+            return "🔮 previsão: viés de alta."
+        if target < local_ppm and new_ppm <= local_ppm:
+            return "🔮 previsão: viés de baixa."
+
+        return "🔮 previsão: estável/indefinida (aguardando novos sinais de liquidez e margem)."
+    except Exception:
+        return "🔮 previsão: n/d."
+
+
 # ========== PIPELINE ==========
 def main(dry_run=False):
     global EXCL_DRY_VERBOSE
@@ -1436,6 +1478,42 @@ def main(dry_run=False):
                     if hours_since < need_peg:
                         will_push = False
                         all_tags.append(f"⏳cooldown{int(need_peg)}h-outrate")
+        # ===== Previsão (depois de avaliar cooldown/stepcap e antes de report.append) =====
+        cooldown_needed_hours = None
+        if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
+            # Se cooldown ativo segurou a mudança, informe janela prevista restante
+            need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
+            # pode ter sido elevado por regras de profit ou peg grace; use o maior já aplicado
+            try:
+                candidates = []
+                for t in all_tags:
+                    if t.startswith("⏳cooldown") and "h" in t:
+                        x = t.replace("⏳cooldown", "")
+                        x = x.replace("-outrate", "").replace("-profit", "").replace("h", "")
+                        x = int(x) if x.isdigit() else None
+                        if x:
+                            candidates.append(x)
+                if candidates:
+                    need = max([need] + candidates)
+            except Exception:
+                pass
+
+            if hours_since < need:
+                cooldown_needed_hours = max(0, int(round(need - hours_since)))
+
+        prediction_msg = build_prediction(
+            out_ratio=out_ratio,
+            margin_ppm_7d=margin_ppm_7d,
+            target=target,
+            local_ppm=local_ppm,
+            new_ppm=new_ppm,
+            fwd_count=fwd_count,
+            neg_margin_global=neg_margin_global,
+            discovery_hit=bool(discovery_hit),   # ← usar a variável booleana já calculada
+            cooldown_needed_hours=cooldown_needed_hours
+        )
+
+
         # ===== DRY RUN / EXCLUIR =====
         # DRY context: --dry-run ou excluido
         act_dry = dry_run or is_excluded
@@ -1472,6 +1550,7 @@ def main(dry_run=False):
                     excl_note = " 🚷excl-dry" if is_excluded else ""
                     report.append(
                         f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                        + "\n   " + prediction_msg
                     )
                     if is_excluded:
                         if new_ppm > local_ppm: excl_dry_up += 1
@@ -1522,6 +1601,7 @@ def main(dry_run=False):
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
                     f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                    + "\n   " + prediction_msg
                 )
                 if is_excluded:
                     if new_ppm > local_ppm: excl_dry_up += 1
@@ -1556,6 +1636,7 @@ def main(dry_run=False):
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
                     f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                    + "\n   " + prediction_msg
                 )
                 if is_excluded:
                     excl_dry_kept += 1
