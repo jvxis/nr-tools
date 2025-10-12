@@ -51,12 +51,12 @@ LIMITS = {
     "PERSISTENT_LOW_BUMP":     (0.03, 0.12),
     "PERSISTENT_LOW_MAX":      (0.10, 0.40),
     "REBAL_FLOOR_MARGIN":      (0.05, 0.30),
-    "REVFLOOR_MIN_PPM_ABS":    (100, 400),
-    "OUTRATE_FLOOR_FACTOR":    (0.85, 1.35),
+    "REVFLOOR_MIN_PPM_ABS":    (100, 700),
+    "OUTRATE_FLOOR_FACTOR":    (0.75, 1.35),
     "BOS_PUSH_MIN_ABS_PPM":    (5, 20),
     "BOS_PUSH_MIN_REL_FRAC":   (0.01, 0.06),
-    "COOLDOWN_HOURS_DOWN":     (3, 18),
-    "COOLDOWN_HOURS_UP":       (1, 12),
+    "COOLDOWN_HOURS_DOWN":     (3, 12),
+    "COOLDOWN_HOURS_UP":       (1, 8),
     "REBAL_BLEND_LAMBDA":      (0.0, 1.0),
     "NEG_MARGIN_SURGE_BUMP":   (0.05, 0.20),
 }
@@ -68,8 +68,8 @@ DEFAULTS = {
     "PERSISTENT_LOW_BUMP": 0.05,
     "PERSISTENT_LOW_MAX": 0.20,
     "REBAL_FLOOR_MARGIN": 0.10,
-    "REVFLOOR_MIN_PPM_ABS": 140,
-    "OUTRATE_FLOOR_FACTOR": 1.0,
+    "REVFLOOR_MIN_PPM_ABS": 500,
+    "OUTRATE_FLOOR_FACTOR": 1.10,
     "BOS_PUSH_MIN_ABS_PPM": 15,
     "BOS_PUSH_MIN_REL_FRAC": 0.04,
     "COOLDOWN_HOURS_DOWN": 6,
@@ -81,14 +81,14 @@ DEFAULTS = {
 # =========================
 # Anti-ratchet (higiene)
 # =========================
-MIN_HOURS_BETWEEN_CHANGES = 6
+MIN_HOURS_BETWEEN_CHANGES = 4
 # >>> v0.3.7: gate de tendência mais robusto (antes era 1)
 REQUIRED_BAD_STREAK = 2
 
 # Orçamento diário de variação ABSOLUTA por chave
 DAILY_CHANGE_BUDGET = {
-    "OUTRATE_FLOOR_FACTOR": 0.08,
-    "REVFLOOR_MIN_PPM_ABS": 40,
+    "OUTRATE_FLOOR_FACTOR": 0.05,
+    "REVFLOOR_MIN_PPM_ABS": 60,
     "REBAL_FLOOR_MARGIN":   0.08,
     "STEP_CAP":             0.03,
     "SURGE_K":              0.15,
@@ -97,8 +97,8 @@ DAILY_CHANGE_BUDGET = {
     "PERSISTENT_LOW_MAX":   0.06,
     "BOS_PUSH_MIN_ABS_PPM": 6,
     "BOS_PUSH_MIN_REL_FRAC":0.01,
-    "COOLDOWN_HOURS_UP":    3,
-    "COOLDOWN_HOURS_DOWN":  4,
+    "COOLDOWN_HOURS_UP":    1,
+    "COOLDOWN_HOURS_DOWN":  2,
     "REBAL_BLEND_LAMBDA":   0.20,
     "NEG_MARGIN_SURGE_BUMP": 0.03,
 }
@@ -110,7 +110,7 @@ META_PATH = "/home/admin/nr-tools/brln-autofee pro/autofee_meta.json"
 # Histerese do alívio de floor-lock
 RELIEF_HYST_FLOORLOCK_MIN   = 120
 RELIEF_HYST_WINDOWS         = 3      # janelas consecutivas exigidas
-RELIEF_HYST_NEG_MARGIN_MIN  = 300    # alívio imediato se out_ppm - rebal_ppm <= -300
+RELIEF_HYST_NEG_MARGIN_MIN  = 150    # alívio imediato se out_ppm - rebal_ppm <= -150
 
 # Agrupador de mudanças (anti-churn)
 DEFER_MIN_NORM_SUM          = 0.60   # ~60% do orçamento diário normalizado
@@ -287,9 +287,13 @@ def _surge_soft_cap(symptoms, kpis):
     fl = symptoms.get("floor_lock", 0)
     no_down = symptoms.get("no_down_low", 0)
     profit_sat = kpis.get("profit_sat", 0)
-    if fl >= 200 and profit_sat <= 0 and no_down >= 10:
-        return LIMITS["SURGE_BUMP_MAX"][1]  # 0.50
+
+    if fl >= 200 and profit_sat <= 0:
+        return 0.50
+    if profit_sat < 0 and (fl >= 80 or no_down >= 10):
+        return 0.40
     return 0.35
+
 
 def adjust(overrides, kpis, symptoms):
     changed = {}
@@ -328,7 +332,8 @@ def adjust(overrides, kpis, symptoms):
     else:
         bad_tier = "ok"
 
-    rebal_overpriced = (rebal_ppm >= out_ppm) or (marg < 50)
+    margin_need = max(80.0, 0.12 * rebal_ppm)  # ~12% do custo ou 80 ppm, o que for maior
+    rebal_overpriced = (rebal_ppm >= out_ppm) or (marg < margin_need)
 
     # ============================================================
     # 1) Alívio de floor-lock com histerese (ANTES do push)
@@ -349,6 +354,8 @@ def adjust(overrides, kpis, symptoms):
             REBAL_FLOOR_MARGIN = new_rebal_floor
             relief_applied = True
             causes.append("alivio_floorlock")
+    
+    disc_hits = int(symptoms.get("discovery", 0))
 
     # ============================================================
     # 2) Plano A (push de pisos) — só se NÃO teve alívio nessa rodada
@@ -357,9 +364,10 @@ def adjust(overrides, kpis, symptoms):
     if not relief_applied and (bad_tier in ("hard", "medium") and rebal_overpriced):
         incr = 1.0 if bad_tier == "hard" else 0.66
 
-        new_out_floor = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
-        if _set_change(changed, "OUTRATE_FLOOR_FACTOR", new_out_floor, OUTRATE_FLOOR_FACTOR):
-            OUTRATE_FLOOR_FACTOR = new_out_floor
+        # 1) privilegie REBAL_FLOOR_MARGIN (ROI de rebal) e piso absoluto
+        new_rebal_m = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
+        if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_m, REBAL_FLOOR_MARGIN):
+            REBAL_FLOOR_MARGIN = new_rebal_m
             pushed_pisos = True
 
         new_revfloor = int(clamp(REVFLOOR_MIN_PPM_ABS + 10*incr, *LIMITS["REVFLOOR_MIN_PPM_ABS"]))
@@ -367,11 +375,14 @@ def adjust(overrides, kpis, symptoms):
             REVFLOOR_MIN_PPM_ABS = new_revfloor
             pushed_pisos = True
 
-        new_rebal_m = clamp(REBAL_FLOOR_MARGIN + 0.02*incr, *LIMITS["REBAL_FLOOR_MARGIN"])
-        if _set_change(changed, "REBAL_FLOOR_MARGIN", new_rebal_m, REBAL_FLOOR_MARGIN):
-            REBAL_FLOOR_MARGIN = new_rebal_m
-            pushed_pisos = True
+        # 2) só empurre OUTRATE_FLOOR_FACTOR se NÃO estiver em discovery pesado
+        if disc_hits < 30:  # limiar prático; ajuste conforme seu volume
+            new_out_floor = clamp(OUTRATE_FLOOR_FACTOR + 0.03*incr, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+            if _set_change(changed, "OUTRATE_FLOOR_FACTOR", new_out_floor, OUTRATE_FLOOR_FACTOR):
+                OUTRATE_FLOOR_FACTOR = new_out_floor
+                pushed_pisos = True
 
+        # 3) impulso de proteção em margem negativa
         new_neg_surge = clamp(NEG_MARGIN_SURGE_BUMP + (0.02 if bad_tier=="hard" else 0.01), *LIMITS["NEG_MARGIN_SURGE_BUMP"])
         if _set_change(changed, "NEG_MARGIN_SURGE_BUMP", new_neg_surge, NEG_MARGIN_SURGE_BUMP):
             pushed_pisos = True
@@ -933,11 +944,13 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         save_meta(meta)
         return
 
-    if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
-        cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
-        new_up = clamp(cu - 1, *LIMITS["COOLDOWN_HOURS_UP"])
-        if "COOLDOWN_HOURS_UP" not in proposed and new_up != cu:
-            proposed["COOLDOWN_HOURS_UP"] = new_up
+    if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK and symptoms.get("discovery", 0) >= 50:
+        of = float(cur.get("OUTRATE_FLOOR_FACTOR", DEFAULTS["OUTRATE_FLOOR_FACTOR"]))
+        new_of = clamp(of - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+        if "OUTRATE_FLOOR_FACTOR" not in proposed and new_of != of:
+            proposed["OUTRATE_FLOOR_FACTOR"] = new_of
+        causes.append("afrouxar_por_good_streak_discovery")
+
 
         plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
         new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
@@ -945,6 +958,13 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
             proposed["PERSISTENT_LOW_MAX"] = new_plmax
         if proposed:
             causes.append("afrouxar_por_good_streak")
+    # Afrouxa o cooldown de subida quando estamos em good streak
+    if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
+        cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
+        new_up = clamp(cu - 1, *LIMITS["COOLDOWN_HOURS_UP"])
+        if "COOLDOWN_HOURS_UP" not in proposed and new_up != cu:
+            proposed["COOLDOWN_HOURS_UP"] = new_up
+        causes.append("afrouxar_por_good_streak_cooldown")
 
     if verbose:
         print("KPIs 7d:", kpis)
@@ -964,6 +984,10 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
 
     if not dry_run and proposed:
         cur.update(proposed)
+        INT_KEYS = {"REVFLOOR_MIN_PPM_ABS","BOS_PUSH_MIN_ABS_PPM","COOLDOWN_HOURS_UP","COOLDOWN_HOURS_DOWN"}
+        for k in INT_KEYS:
+            if k in cur and isinstance(cur[k], (int, float)):
+                cur[k] = int(round(cur[k]))
         save_json(OVERRIDES, cur)
         meta["last_change_ts"] = int(time.time())
         save_meta(meta)
@@ -984,5 +1008,6 @@ if __name__ == "__main__":
     ap.add_argument("--no-telegram", action="store_true", help="Não envia mensagem no Telegram.")
     args = ap.parse_args()
     main(dry_run=args.dry_run, verbose=True, force_telegram=args.telegram, no_telegram=args.no_telegram)
+
 
 

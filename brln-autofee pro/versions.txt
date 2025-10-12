@@ -1,3 +1,4 @@
+0.3.9 - Melhorias Ai Tuner patch 01 e manual explicativo novo do Ai Tuner
 0.3.8 - Autofee com Previsão de Tendência por Canal e melhorias Rebal Trigger
 0.3.7 - Melhorias Ai Tuner
 0.3.6 - Melhorias Autofee e Trigger Rebal maximizar lucro
