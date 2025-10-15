@@ -242,6 +242,10 @@ TAG_UNKNOWN  = "🏷️unknown"
 # Persistir classe em dry-run?
 DRYRUN_SAVE_CLASS = True
 
+# ========== EXPLICAÇÃO DIDÁTICA ==========
+DIDACTIC_EXPLAIN_ENABLE = True     # padrão desligado; liga por CLI/env
+DIDACTIC_LEVEL = "detailed"        # "basic" (1 linha) ou "detailed" (passo a passo)
+
 # Lista de exclusões (opcional). Deixe vazia ou adicione pubkeys para pular.
 EXCLUSION_LIST = set()  # exemplo: {"02abc...", "03def..."}
 
@@ -717,6 +721,128 @@ def build_prediction(out_ratio, margin_ppm_7d, target, local_ppm, new_ppm, fwd_c
     except Exception:
         return "🔮 previsão: n/d."
 
+def build_didactic_explanation(
+    local_ppm:int, target:int, final_ppm:int, floor_ppm:int,
+    out_ratio:float, fwd_count:int, margin_ppm_7d:int,
+    class_label:str, neg_margin_global:bool, new_inbound:bool,
+    discovery_hit:bool, seed_used:float, out_ppm_7d:float,
+    base_cost_for_margin:float, global_neg_lock_applied:bool,
+    all_tags:list, will_push:bool
+) -> str:
+    """
+    Explica em linguagem leiga e separa:
+      • Decisão agora: o que de fato vai acontecer (considera cooldown/stepcap/hold-small etc.)
+      • Tendência (alvo): para onde o algoritmo pende (sem as travas)
+    Usa apenas thresholds vindos das constantes globais (sem hardcode).
+    """
+    try:
+        # Pegamos thresholds globais (com defaults só por segurança)
+        LOW_T  = float(globals().get("LOW_OUTBOUND_THRESH", 0.05))
+        HIGH_T = float(globals().get("HIGH_OUTBOUND_THRESH", 0.20))
+        DISC_T = float(globals().get("DISCOVERY_OUT_MIN", 0.40))
+
+        # Tendência: baseada no alvo/resultado “bruto”
+        if final_ppm > local_ppm:   trend_txt = "alta"
+        elif final_ppm < local_ppm: trend_txt = "baixa"
+        else:                       trend_txt = "estável"
+
+        # Decisão agora: respeita travas (will_push)
+        if not will_push or final_ppm == local_ppm:
+            decision_txt = "manter"
+        else:
+            decision_txt = "subir" if final_ppm > local_ppm else "reduzir"
+
+        sinais, significados, bloqueios = [], [], []
+
+        # Liquidez (sem hardcode)
+        if out_ratio < LOW_T:
+            sinais.append(f"liquidez de saída baixa ({out_ratio*100:.0f}%)")
+            significados.append("o canal está 'drenado', então encarece para preservar saldo")
+        elif discovery_hit and fwd_count == 0 and out_ratio > DISC_T:
+            sinais.append(f"muita liquidez ociosa ({out_ratio*100:.0f}%) e quase sem uso")
+            significados.append("testamos preço mais baixo para incentivar tráfego (discovery)")
+        elif out_ratio > HIGH_T and final_ppm < local_ppm:
+            sinais.append(f"liquidez confortável ({out_ratio*100:.0f}%)")
+            significados.append("há espaço para reduzir sem risco imediato")
+
+        # Margem 7d
+        if margin_ppm_7d < 0:
+            sinais.append("margem do canal nos últimos 7 dias está negativa")
+            significados.append("a taxa atual não paga o custo médio de reequilíbrio (rebal)")
+        if neg_margin_global:
+            if global_neg_lock_applied:
+                sinais.append("margem global 7d negativa (lock ativo)")
+                significados.append("quedas travadas para não vender abaixo do custo")
+            else:
+                sinais.append("margem global 7d pressionada")
+                significados.append("prudência para não piorar o resultado")
+
+        # Pisos: rebal / peg
+        piso_msgs = []
+        if final_ppm == floor_ppm:
+            # Rebal floor
+            if base_cost_for_margin and floor_ppm >= int((base_cost_for_margin or 0) * 1.0):
+                piso_msgs.append("pelo custo médio de rebal (não vender abaixo do custo)")
+            # Peg (preço já vendido)
+            if ("🧲peg" in (all_tags or [])) or (out_ppm_7d and floor_ppm >= int(out_ppm_7d)):
+                piso_msgs.append("colado no preço já vendido (peg)")
+        if piso_msgs:
+            sinais.append("piso de segurança ativo")
+            significados.append("; ".join(piso_msgs))
+
+        # Canal novo inbound
+        if new_inbound and local_ppm > final_ppm:
+            sinais.append("canal novo com inbound e pouca movimentação")
+            significados.append("normalizamos para perto do preço de referência (seed)")
+
+        # Classe
+        if class_label == "sink":
+            sinais.append("tende a receber mais do que enviar")
+            significados.append("evitamos ficar baratos demais para não esvaziar ainda mais")
+        elif class_label == "source" and final_ppm <= local_ppm:
+            sinais.append("tende a enviar mais do que receber")
+            significados.append("podemos trabalhar com taxa mais baixa para ganhar volume")
+        elif class_label == "router":
+            sinais.append("canal equilibrado (ponte)")
+            significados.append("ajustes suaves para manter fluxo estável")
+
+        # Bloqueios / motivos para manter (derivados de tags; sem números fixos)
+        if any(t.startswith("⛔stepcap") for t in (all_tags or [])):
+            bloqueios.append("mudanças graduais (step cap)")
+        if any(t.startswith("⏳cooldown") for t in (all_tags or [])):
+            bloqueios.append("janela de segurança (cooldown)")
+        if "🧘hold-small" in (all_tags or []):
+            bloqueios.append("variação muito pequena (evitamos micro-updates)")
+        if "🧱floor-lock" in (all_tags or []):
+            bloqueios.append("travado no piso de segurança")
+
+        # Modo básico/detalhado (sem hardcode de thresholds)
+        if (globals().get("DIDACTIC_LEVEL") or "basic") == "basic":
+            base = f"ℹ️ explicação: decisão agora = **{decision_txt}**; tendência (alvo) = **{trend_txt}**."
+            motivos = []
+            if out_ratio < LOW_T: motivos.append("canal drenado")
+            if margin_ppm_7d < 0: motivos.append("margem negativa")
+            if piso_msgs: motivos.append("piso de segurança")
+            if discovery_hit and final_ppm < local_ppm: motivos.append("ocioso (discovery)")
+            if class_label in ("sink","source","router"): motivos.append(f"perfil {class_label}")
+            if motivos:
+                base += " Motivos: " + ", ".join(motivos) + "."
+            if decision_txt == "manter" and bloqueios:
+                base += " Mantemos por: " + "; ".join(bloqueios[:3]) + "."
+            return base
+
+        linhas = ["ℹ️ explicação (passo a passo):"]
+        if sinais:        linhas.append("   • O que vimos: " + "; ".join(sinais[:3]) + ".")
+        if significados:  linhas.append("   • Significado: " + "; ".join(significados[:3]) + ".")
+        linhas.append(f"   • Tendência (alvo): {trend_txt}.")
+        linhas.append(f"   • Decisão agora: {decision_txt}.")
+        if decision_txt == "manter" and bloqueios:
+            linhas.append("   • Mantemos por: " + "; ".join(bloqueios[:3]) + ".")
+        return "\n".join(linhas)
+
+    except Exception:
+        return "ℹ️ explicação: ajuste baseado em liquidez, custo (rebal) e demanda observada."
+
 
 # ========== PIPELINE ==========
 def main(dry_run=False):
@@ -726,6 +852,14 @@ def main(dry_run=False):
     env_excl = os.getenv("EXCL_DRY_VERBOSE")
     if env_excl is not None:
         EXCL_DRY_VERBOSE = str(env_excl).strip().lower() in ("1","true","yes","on")
+    # Override de explicação didática por variável de ambiente
+    env_did = os.getenv("DIDACTIC_EXPLAIN")
+    if env_did is not None:
+        globals()["DIDACTIC_EXPLAIN_ENABLE"] = str(env_did).strip().lower() in ("1","true","yes","on")
+
+    env_did_level = os.getenv("DIDACTIC_LEVEL")
+    if env_did_level and env_did_level.strip().lower() in ("basic","detailed"):
+        globals()["DIDACTIC_LEVEL"] = env_did_level.strip().lower()
 
     cache = load_json(CACHE_PATH, {})
     state = get_state()
@@ -899,7 +1033,10 @@ def main(dry_run=False):
         meta = channels_meta.get(cid, {})
         alias = meta.get("alias", "Unknown")
         local_ppm = meta.get("local_ppm", 0)
+        remote_ppm = int(meta.get("remote_fee_rate") or 0)   # NEW
 
+        # opcional: helper para não repetir
+        fee_lr_str = f"💱 fee L/R {local_ppm}/{remote_ppm}ppm"  # NEW
         # snapshot
         live_info = live_by_scid.get(cid)
         if (not live_info) and has_chan_point:
@@ -1549,9 +1686,34 @@ def main(dry_run=False):
                     new_dir = dir_for_emoji
                     excl_note = " 🚷excl-dry" if is_excluded else ""
                     report.append(
-                        f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
+                        f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
+                        f"out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                        f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
+                        + (
+                            ("\n   " + build_didactic_explanation(
+                                local_ppm=local_ppm,
+                                target=target,
+                                final_ppm=new_ppm if 'new_ppm' in locals() else local_ppm,
+                                floor_ppm=floor_ppm,
+                                out_ratio=out_ratio,
+                                fwd_count=fwd_count,
+                                margin_ppm_7d=margin_ppm_7d,
+                                class_label=class_label,
+                                neg_margin_global=neg_margin_global,
+                                new_inbound=bool(new_inbound),
+                                discovery_hit=bool(discovery_hit),
+                                seed_used=float(seed_used),
+                                out_ppm_7d=float(out_ppm_7d or 0),
+                                base_cost_for_margin=float(base_cost_for_margin or 0),
+                                global_neg_lock_applied=bool(global_neg_lock_applied),
+                                all_tags=all_tags,
+                                will_push=bool(will_push)
+                            )) if DIDACTIC_EXPLAIN_ENABLE else ""
+                        )
                         + "\n   " + prediction_msg
+
                     )
+
                     if is_excluded:
                         if new_ppm > local_ppm: excl_dry_up += 1
                         else: excl_dry_down += 1
@@ -1600,9 +1762,33 @@ def main(dry_run=False):
 
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
-                    f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
-                    + "\n   " + prediction_msg
+                    f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
+                    f"out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                    f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
+                    + (
+                            ("\n   " + build_didactic_explanation(
+                                local_ppm=local_ppm,
+                                target=target,
+                                final_ppm=new_ppm if 'new_ppm' in locals() else local_ppm,
+                                floor_ppm=floor_ppm,
+                                out_ratio=out_ratio,
+                                fwd_count=fwd_count,
+                                margin_ppm_7d=margin_ppm_7d,
+                                class_label=class_label,
+                                neg_margin_global=neg_margin_global,
+                                new_inbound=bool(new_inbound),
+                                discovery_hit=bool(discovery_hit),
+                                seed_used=float(seed_used),
+                                out_ppm_7d=float(out_ppm_7d or 0),
+                                base_cost_for_margin=float(base_cost_for_margin or 0),
+                                global_neg_lock_applied=bool(global_neg_lock_applied),
+                                all_tags=all_tags,
+                                will_push=bool(will_push)
+                            )) if DIDACTIC_EXPLAIN_ENABLE else ""
+                        )
+                        + "\n   " + prediction_msg
                 )
+
                 if is_excluded:
                     if new_ppm > local_ppm: excl_dry_up += 1
                     else: excl_dry_down += 1
@@ -1635,9 +1821,33 @@ def main(dry_run=False):
             else:
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
-                    f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | rev_share≈{rev_share:.2f} | {' '.join(all_tags)}"
-                    + "\n   " + prediction_msg
+                    f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | "
+                    f"out_ppm7d≈{int(out_ppm_7d)} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                    f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
+                        + (
+                            ("\n   " + build_didactic_explanation(
+                                local_ppm=local_ppm,
+                                target=target,
+                                final_ppm=new_ppm if 'new_ppm' in locals() else local_ppm,
+                                floor_ppm=floor_ppm,
+                                out_ratio=out_ratio,
+                                fwd_count=fwd_count,
+                                margin_ppm_7d=margin_ppm_7d,
+                                class_label=class_label,
+                                neg_margin_global=neg_margin_global,
+                                new_inbound=bool(new_inbound),
+                                discovery_hit=bool(discovery_hit),
+                                seed_used=float(seed_used),
+                                out_ppm_7d=float(out_ppm_7d or 0),
+                                base_cost_for_margin=float(base_cost_for_margin or 0),
+                                global_neg_lock_applied=bool(global_neg_lock_applied),
+                                all_tags=all_tags,
+                                will_push=bool(will_push)
+                            )) if DIDACTIC_EXPLAIN_ENABLE else ""
+                        )
+                        + "\n   " + prediction_msg
                 )
+
                 if is_excluded:
                     excl_dry_kept += 1
                 else:
@@ -1673,6 +1883,18 @@ if __name__ == "__main__":
         action="store_true",
         help="Simula: não aplica BOS; grava apenas campos de classificação se DRYRUN_SAVE_CLASS=True"
     )
+    
+    parser.add_argument(
+        "--didactic-explain",
+        action="store_true",
+        help="Mostra explicação didática antes da previsão para cada canal."
+    )
+    parser.add_argument(
+        "--didactic-detailed",
+        action="store_true",
+        help="Usa explicação didática em modo detalhado (passo a passo)."
+    )
+
     # Controle de verbosidade para canais excluídos
     excl = parser.add_mutually_exclusive_group()
     excl.add_argument("--excl-dry-verbose", action="store_true", help="Mostra detalhes completos nos canais excluídos (padrão).")
@@ -1684,7 +1906,14 @@ if __name__ == "__main__":
         EXCL_DRY_VERBOSE = True
     if args.excl_dry_tag_only:
         EXCL_DRY_VERBOSE = False
+    if args.didactic_explain:
+        DIDACTIC_EXPLAIN_ENABLE = True
+    if args.didactic_detailed:
+        DIDACTIC_EXPLAIN_ENABLE = True
+        DIDACTIC_LEVEL = "detailed"
+
 
     main(dry_run=args.dry_run)
+
 
 
