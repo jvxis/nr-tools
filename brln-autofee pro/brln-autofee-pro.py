@@ -95,7 +95,7 @@ OUTRATE_FLOOR_MIN_FWDS    = 4
 
 # >>> PATCH: OUTRATE PEG (grudar no preço observado) e ajustes de floor
 OUTRATE_PEG_ENABLE         = True     # ativa proteção para não cair abaixo do preço que já vendeu
-OUTRATE_PEG_MIN_FWDS       = 5        # bastou 5 forward na janela para reconhecer 'preço observado'
+OUTRATE_PEG_MIN_FWDS       = 4        # bastou 4 forward na janela para reconhecer 'preço observado'
 OUTRATE_PEG_HEADROOM       = 0.01     # folga de +1% acima do outrate observado
 OUTRATE_PEG_GRACE_HOURS    = 36       # só autoriza cair abaixo do outrate após 36h desde a última mudança
 OUTRATE_PEG_SEED_MULT      = 1.10     # se outrate >= 1.05x seed, trata como demanda real (fura teto seed*1.8)
@@ -1507,7 +1507,16 @@ def main(dry_run=False):
             # autoriza teto pelo outrate (com folga do PEG)
             local_max = max(local_max, clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM)))))
 
-        final_ppm = max(MIN_PPM, min(local_max, int(round(final_ppm))))
+        # ⛏️ FIX: primeiro clamp no teto, depois REAPLICA o step-cap para não “degolar” em 1 rodada
+        final_ppm_preclamp = int(round(final_ppm))
+        final_ppm_clamped  = max(MIN_PPM, min(local_max, final_ppm_preclamp))
+        final_ppm = apply_step_cap2(
+            local_ppm,
+            final_ppm_clamped,
+            cap_frac,
+            STEP_MIN_STEP_PPM if final_ppm_clamped <= local_ppm else STEP_MIN_STEP_PPM_UP
+        )
+
 
         # Telemetria: bateu no MAX_PPM global?
         if final_ppm == MAX_PPM:

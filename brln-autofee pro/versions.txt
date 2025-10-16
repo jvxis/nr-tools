@@ -1,3 +1,4 @@
+0.3.12 - Fix Autofee
 0.3.11 - Melhorias Autofee + Explicação das Alterações
 0.3.10 - Ai Tuner com Assisted Revenue para tomada de decisão
 0.3.9 - Melhorias Ai Tuner patch 01 e manual explicativo novo do Ai Tuner
