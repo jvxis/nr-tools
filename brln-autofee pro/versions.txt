@@ -1,3 +1,5 @@
+0.3.14 - Para Source e Router com rebal 7d = 0 usar out_rate7d como piso
+0.3.13 - Inserir rebal 7d na info do autofee
 0.3.12 - Fix Autofee
 0.3.11 - Melhorias Autofee + Explicação das Alterações
 0.3.10 - Ai Tuner com Assisted Revenue para tomada de decisão
