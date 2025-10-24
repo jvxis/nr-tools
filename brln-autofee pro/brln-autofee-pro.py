@@ -1376,19 +1376,40 @@ def main(dry_run=False):
 
         # clamp do alvo e guarda "no-down while low"
         target = clamp_ppm(boosted_target)
-        # >>> PATCH [B]: em use_out_cost, tender a alinhar alvo ao out_ppm observado, reduzindo taxa
-        if use_out_cost and (out_ppm_7d or 0) > 0 and target > out_ppm_7d:
-            # 10% abaixo do market observado, com proteção pelo seed em source
-            target_hint = int(round(out_ppm_7d * 0.90))
+        # >>> PATCH [B’]: viés de queda quando usamos out como custo (source/router sem rebal)
+        # Força o target a tender ao out_ppm observado sempre que não estivermos "low".
+        if use_out_cost and (out_ppm_7d or 0) > 0:
+            not_low = (out_ratio >= PERSISTENT_LOW_THRESH)  # com seu threshold = 0.10
+
+            # Caso 1: algum bump/persistência empurrou target >= taxa atual → puxa para ~0.9× out_ppm
+            if not_low and target >= local_ppm:
+                target = clamp_ppm(int(round(out_ppm_7d * 0.90)))
+
+            # Caso 2: mesmo não estando acima da taxa, se ficou acima do out_ppm, puxa para ~0.9×
+            elif target > out_ppm_7d:
+                target = clamp_ppm(int(round(out_ppm_7d * 0.90)))
+
+            # Em SOURCE, ainda respeite preferência por alvo mais baixo relativo ao seed
             if class_label == "source":
-                # respeita preferência por alvo mais baixo relativo ao seed
-                target_hint = min(target_hint, clamp_ppm(int(seed_used * SOURCE_SEED_TARGET_FRAC)))
-            target = clamp_ppm(max(MIN_PPM, target_hint))
+                target = min(target, clamp_ppm(int(seed_used * SOURCE_SEED_TARGET_FRAC)))
+
 
         pl_tags = []
         if (not new_inbound) and out_ratio < PERSISTENT_LOW_THRESH and target < local_ppm:
-            target = local_ppm
-            pl_tags.append("🙅‍♂️no-down-low")
+            # Exceção: em source/router sem rebal por canal (use_out_cost),
+            # permita cair até o "preço observado" (outrate) com folga do PEG.
+            if use_out_cost and fwd_count >= OUTRATE_PEG_MIN_FWDS and (out_ppm_7d or 0) > 0:
+                peg_limit = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+                # não baixar abaixo do PEG; mantém ainda acima do floor
+                target = max(target, peg_limit)
+                if DEBUG_TAGS:
+                    # 👇 em vez de diag_tags, empurre para pl_tags
+                    pl_tags.append("🧲peg-except-low")
+            else:
+                target = local_ppm
+                pl_tags.append("🙅‍♂️no-down-low")
+
+
 
         # ---- STEP CAP dinâmico ----
         cap_frac = STEP_CAP
@@ -1592,6 +1613,9 @@ def main(dry_run=False):
             diag_tags.append("🧲peg")
         if DEBUG_TAGS:
             diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
+        # garantir que pl_tags (no-down-low) apareçam nas tags finais
+        for t in pl_tags:
+            diag_tags.append(t)
         status_tags = status_tags  # já montado lá em cima (🟢on/🔴off)
         all_tags = status_tags + class_tags + seed_tags + diag_tags
 
@@ -1960,6 +1984,5 @@ if __name__ == "__main__":
 
 
     main(dry_run=args.dry_run)
-
 
 
