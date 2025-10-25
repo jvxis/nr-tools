@@ -1013,7 +1013,8 @@ def main(dry_run=False):
     out_ppm_total = ppm(sum(out_fee_sat.values()), sum(out_amt_sat.values()))
     neg_margin_global = (
         bool(rebal_cost_ppm_global) and bool(out_ppm_total) and out_ppm_total < rebal_cost_ppm_global
-        )
+    )
+    
 
     # ==== SHARDING SLOT ====
     now_ts = int(time.time())
@@ -1438,12 +1439,18 @@ def main(dry_run=False):
             cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
             if discovery_hard and local_ppm > target:
                 cap_frac = max(cap_frac, DISCOVERY_HARDDROP_CAP_FRAC)
+                
+        # [PATCH 2]: só permitir lock global se houver base por canal quando em per_channel
+        can_lock_globally = True
+        if (REBAL_COST_MODE or "per_channel").lower() == "per_channel":
+            if cid not in rebal_cost_ppm_by_chan_use:  # sem rebal por canal na janela
+                can_lock_globally = False
 
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
             cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
         # === Travamento quando a operação 7d está negativa (com suavização opcional) ===
-        if neg_margin_global:
+        if neg_margin_global and can_lock_globally:
             allow_soften = False
             if GLOBAL_NEG_LOCK_SOFTEN_ENABLE:
                 # Canal saudável: muita liquidez local e margem 7d do canal >= 0 (se exigido)
@@ -1507,7 +1514,14 @@ def main(dry_run=False):
         # Piso de rebal conforme REBAL_COST_MODE
         if REBAL_FLOOR_ENABLE:
             base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
-
+            # [PATCH 1]: no modo per_channel, se NÃO houve rebal por canal (ou não atingiu valor mínimo),
+            # não use o custo global para formar piso.
+            no_chan_rebal_for_floor = (
+                (REBAL_COST_MODE or "per_channel").lower() == "per_channel"
+                and cid not in rebal_cost_ppm_by_chan_use
+            )
+            if no_chan_rebal_for_floor:
+                base_cost = 0.0
             # em source/router sem rebal por canal, já tinha exceção:
             if use_out_cost:
                 base_cost = 0.0
@@ -1611,6 +1625,11 @@ def main(dry_run=False):
             STEP_MIN_STEP_PPM if final_ppm_clamped <= local_ppm else STEP_MIN_STEP_PPM_UP
         )
 
+        # [PATCH 3]: garantir floor após clamp e step-cap
+        if REBAL_FLOOR_ENABLE and final_ppm < floor_ppm:
+            final_ppm = floor_ppm
+            # opcional: marque o motivo; a tag é criada mais abaixo, mas se quiser
+            # pode setar um flag para incluir "🧱floor-lock".
 
         # Telemetria: bateu no MAX_PPM global?
         if final_ppm == MAX_PPM:
@@ -2020,5 +2039,3 @@ if __name__ == "__main__":
 
 
     main(dry_run=args.dry_run)
-
-
