@@ -151,6 +151,13 @@ EXTREME_DRAIN_OUT_MAX      = 0.03   # e out_ratio < 3%
 EXTREME_DRAIN_STEP_CAP     = 0.15   # step cap p/ SUBIR
 EXTREME_DRAIN_MIN_STEP_PPM = 15     # passo mínimo p/ SUBIR
 
+# Extreme drain TURBO (super drenado crônico)
+EXTREME_DRAIN_TURBO_ENABLE       = True
+EXTREME_DRAIN_TURBO_STREAK_MIN   = 300     #
+EXTREME_DRAIN_TURBO_OUT_MAX      = 0.01
+EXTREME_DRAIN_TURBO_STEP_CAP     = 0.20
+EXTREME_DRAIN_TURBO_MIN_STEP_PPM = 20
+
 # MOD: Revenue floor (piso por tráfego) p/ super-rotas muito ativas
 REVFLOOR_ENABLE            = True
 REVFLOOR_BASELINE_THRESH   = 80
@@ -1449,6 +1456,8 @@ def main(dry_run=False):
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
             cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
+            
+        lock_skip_tag = None
         # === Travamento quando a operação 7d está negativa (com suavização opcional) ===
         if neg_margin_global and can_lock_globally:
             allow_soften = False
@@ -1473,9 +1482,14 @@ def main(dry_run=False):
 
             # Mais fôlego para subir quando o global está no vermelho
             cap_frac = max(cap_frac, STEP_CAP + 0.05)
-
+            
+            # Diagnóstico: lock global "skipado" por falta de base por canal
+            
+            if neg_margin_global and (not can_lock_globally) and (target < local_ppm) and (not discovery_hit) and (not new_inbound):
+                lock_skip_tag = "🛡️lock-skip(no-chan-rebal)"
 
         # Extreme drain mode — acelera SUBIDAS
+        STEP_MIN_STEP_PPM_UP = STEP_MIN_STEP_PPM
         if EXTREME_DRAIN_ENABLE:
             low_streak_val = state.get(cid, {}).get("low_streak", 0)
             baseline_val = state.get(cid, {}).get("baseline_fwd7d", 0) or 0
@@ -1484,11 +1498,27 @@ def main(dry_run=False):
                 baseline_val > 0 and
                 target > local_ppm):
                 cap_frac = max(cap_frac, EXTREME_DRAIN_STEP_CAP)
-                STEP_MIN_STEP_PPM_UP = max(STEP_MIN_STEP_PPM, EXTREME_DRAIN_MIN_STEP_PPM)
-            else:
-                STEP_MIN_STEP_PPM_UP = STEP_MIN_STEP_PPM
+                STEP_MIN_STEP_PPM_UP = max(STEP_MIN_STEP_PPM_UP, EXTREME_DRAIN_MIN_STEP_PPM)
+
+            # TURBO: streak MUITO alto + out ≤1%
+            if EXTREME_DRAIN_TURBO_ENABLE and target > local_ppm:
+                if (low_streak_val >= EXTREME_DRAIN_TURBO_STREAK_MIN and
+                    out_ratio <= EXTREME_DRAIN_TURBO_OUT_MAX and
+                    baseline_val > 0):
+                    cap_frac = max(cap_frac, EXTREME_DRAIN_TURBO_STEP_CAP)
+                    STEP_MIN_STEP_PPM_UP = max(STEP_MIN_STEP_PPM_UP, EXTREME_DRAIN_TURBO_MIN_STEP_PPM)
+                    # marque no log
+                    if DEBUG_TAGS:
+                        diag_tag_extreme = f"⚡surge+{int((EXTREME_DRAIN_TURBO_STEP_CAP-STEP_CAP)*100)}%"
+                        # evita duplicar se já existir surge; e adiciona sinalizador explícito:
+                        if diag_tag_extreme not in (surge_tag or ""):
+                            pass  # será adicionado abaixo via diag_tags
+                    # coloque uma flag simples p/ inserir tag
+                    extreme_turbo_applied = True
         else:
             STEP_MIN_STEP_PPM_UP = STEP_MIN_STEP_PPM
+            extreme_turbo_applied = False
+
 
         # bônus leve de reatividade em ROUTER
         if class_label == "router":
@@ -1510,12 +1540,17 @@ def main(dry_run=False):
             if baseline > 0 and fwd_count < baseline * CB_DROP_RATIO:
                 raw_step_ppm = clamp_ppm(int(raw_step_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
+        
+        # ---- Floor reasons (tracking)
+        floor_src = "none"
+        outrate_floor = None
+        outrate_peg_ppm = None
+        rebal_floor_ppm = MIN_PPM  # default; será recalculado
 
         # Piso de rebal conforme REBAL_COST_MODE
         if REBAL_FLOOR_ENABLE:
             base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
-            # [PATCH 1]: no modo per_channel, se NÃO houve rebal por canal (ou não atingiu valor mínimo),
-            # não use o custo global para formar piso.
+            # no modo per_channel, sem rebal por canal -> não usa global
             no_chan_rebal_for_floor = (
                 (REBAL_COST_MODE or "per_channel").lower() == "per_channel"
                 and cid not in rebal_cost_ppm_by_chan_use
@@ -1527,15 +1562,18 @@ def main(dry_run=False):
                 base_cost = 0.0
 
             if base_cost > 0:
-                # piso de rebal "cheio" (com margem)
                 rebal_floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
                 floor_ppm = rebal_floor_ppm
+                floor_src = "rebal"
             else:
                 rebal_floor_ppm = MIN_PPM
                 floor_ppm = MIN_PPM
+                floor_src = "none"
         else:
             rebal_floor_ppm = MIN_PPM
             floor_ppm = MIN_PPM
+            floor_src = "none"
+
 
 
         # Outrate floor dinâmico (só aumenta)
@@ -1555,13 +1593,10 @@ def main(dry_run=False):
 
         if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
+            prev_floor = floor_ppm
             floor_ppm = max(floor_ppm, outrate_floor)
-
-
-        # Cap do floor pelo seed — **pulado em SINK** (se configurado)
-        seed_cap_ppm = clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR)))
-        if not (class_label == "sink" and SINK_SKIP_SEED_CAP):
-            floor_ppm = min(floor_ppm, seed_cap_ppm)
+            if floor_ppm != prev_floor:
+                floor_src = "outrate"
 
 
         # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
@@ -1569,22 +1604,40 @@ def main(dry_run=False):
         if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
             outrate_peg_active = True
             outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+            prev_floor = floor_ppm
             floor_ppm = max(floor_ppm, outrate_peg_ppm)
+            if floor_ppm != prev_floor:
+                floor_src = "peg"
 
 
         # SINK — reforço: nunca abaixo do piso de rebal por canal (com margem)
         if class_label == "sink" and SINK_KEEP_FLOOR_AT_REBAL_COST:
+            prev_floor = floor_ppm
             floor_ppm = max(floor_ppm, rebal_floor_ppm)
+            if floor_ppm != prev_floor and floor_src not in ("peg", "outrate"):
+                floor_src = "rebal"   # reforço do rebal para sink
 
         # Regras extras existentes para SINK continuam válidas
         if class_label == "sink":
             extra = clamp_ppm(int(math.ceil((base_cost_for_margin or 0) * SINK_EXTRA_FLOOR_MARGIN)))
+            prev_floor = floor_ppm
             floor_ppm = max(floor_ppm, extra)
-            floor_ppm = max(floor_ppm, clamp_ppm(int(seed_used * SINK_MIN_OVER_SEED_FRAC)))
+            if floor_ppm != prev_floor and floor_src not in ("peg", "outrate", "rebal"):
+                floor_src = "sink-extra"
+        # Cap do floor pelo seed — pulado em SINK se configurado
+        seed_cap_ppm = clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR)))
+        if not (class_label == "sink" and SINK_SKIP_SEED_CAP):
+            prev_floor = floor_ppm
+            floor_ppm = min(floor_ppm, seed_cap_ppm)
+            if floor_ppm != prev_floor and floor_src not in ("peg", "outrate", "rebal", "sink-extra"):
+                floor_src = "seed-cap"
 
         # ⬇️ NOVO: em discovery, desligar piso de rebal (deixa só o MIN_PPM)
         if discovery_hit:
+            prev_floor = floor_ppm
             floor_ppm = max(MIN_PPM, min(floor_ppm, MIN_PPM))
+            if floor_ppm != prev_floor:
+                floor_src = "none"
 
         # Cálculo final com piso
         final_ppm = max(raw_step_ppm, floor_ppm)
@@ -1630,6 +1683,8 @@ def main(dry_run=False):
             final_ppm = floor_ppm
             # opcional: marque o motivo; a tag é criada mais abaixo, mas se quiser
             # pode setar um flag para incluir "🧱floor-lock".
+        # Sufixo textual indicando a origem do piso, para o log
+        floor_src_tag = "" if not floor_src else f"({floor_src})"
 
         # Telemetria: bateu no MAX_PPM global?
         if final_ppm == MAX_PPM:
@@ -1650,6 +1705,13 @@ def main(dry_run=False):
 
         if final_ppm == local_ppm and target != local_ppm and floor_ppm <= local_ppm:
             diag_tags.append("⛔stepcap-lock")
+            
+        if lock_skip_tag:
+            diag_tags.append(lock_skip_tag)
+            
+        if 'extreme_turbo_applied' in locals() and extreme_turbo_applied:
+            diag_tags.append("🚀extreme-drain+")
+
 
         # marcações de contexto
         discovery_hit and diag_tags.append("🧪discovery")
@@ -1715,7 +1777,7 @@ def main(dry_run=False):
         hours_since = (int(time.time()) - last_ts) / 3600 if last_ts else 999
         fwds_at_change = st_prev.get("fwds_at_change", 0)
         fwds_since = max(0, fwd_count - fwds_at_change)
-
+        cooldown_blocked = False
         if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
             # em discovery e QUEDA, não aplicar cooldown
             if discovery_hit and new_ppm < local_ppm:
@@ -1724,12 +1786,14 @@ def main(dry_run=False):
                 need = COOLDOWN_HOURS_UP if new_ppm > local_ppm else COOLDOWN_HOURS_DOWN
                 if hours_since < need and fwds_since < COOLDOWN_FWDS_MIN:
                     will_push = False
+                    cooldown_blocked = True
                     all_tags.append(f"⏳cooldown{int(need)}h")
                 if (COOLDOWN_PROFIT_DOWN_ENABLE and new_ppm < local_ppm):
                     if (margin_ppm_7d > COOLDOWN_PROFIT_MARGIN_MIN and fwd_count >= COOLDOWN_PROFIT_FWDS_MIN):
                         need2 = max(need, COOLDOWN_HOURS_DOWN)
                         if hours_since < need2:
                             will_push = False
+                            cooldown_blocked = True
                             all_tags.append(f"⏳cooldown-profit{int(need2)}h")
             # >>> PATCH: OUTRATE PEG — queda abaixo do outrate só após GRACE_HOURS
             if new_ppm < local_ppm and OUTRATE_PEG_ENABLE and outrate_peg_active:
@@ -1739,6 +1803,7 @@ def main(dry_run=False):
                     need_peg = max(COOLDOWN_HOURS_DOWN, OUTRATE_PEG_GRACE_HOURS)
                     if hours_since < need_peg:
                         will_push = False
+                        cooldown_blocked = True
                         all_tags.append(f"⏳cooldown{int(need_peg)}h-outrate")
         # ===== Previsão (depois de avaliar cooldown/stepcap e antes de report.append) =====
         cooldown_needed_hours = None
@@ -1762,7 +1827,14 @@ def main(dry_run=False):
 
             if hours_since < need:
                 cooldown_needed_hours = max(0, int(round(need - hours_since)))
-
+            
+            if cooldown_blocked:
+                # acrescente o sufixo "(blocked)" na(s) tag(s) de cooldown
+                for i, t in enumerate(list(all_tags)):
+                    if t.startswith("⏳cooldown"):
+                        if "(blocked)" not in t:
+                            all_tags[i] = t + "(blocked)"
+        
         prediction_msg = build_prediction(
             out_ratio=out_ratio,
             margin_ppm_7d=margin_ppm_7d,
@@ -1812,7 +1884,7 @@ def main(dry_run=False):
                     excl_note = " 🚷excl-dry" if is_excluded else ""
                     report.append(
                         f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
-                        f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                        f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                         f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                         + (
                             ("\n   " + build_didactic_explanation(
@@ -1888,7 +1960,7 @@ def main(dry_run=False):
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
                     f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
-                    f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                    f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                     f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                     + (
                             ("\n   " + build_didactic_explanation(
@@ -1947,7 +2019,7 @@ def main(dry_run=False):
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
                     f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | "
-                    f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm} | marg≈{margin_ppm_7d} | "
+                    f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                     f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                         + (
                             ("\n   " + build_didactic_explanation(

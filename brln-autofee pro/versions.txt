@@ -1,3 +1,4 @@
+0.3.17 - Melhoria Autofee - Turbo Drain Mode e Info Motivo do Floor
 0.3.16 - Melhoria Autofee - Comportamento de Sink cheio e sem venda
 0.3.15 - Melhorias Ai Tuner - Uso do lucro real para a tomada de decisão de Bad Streak
 0.3.14 - Para Source e Router com rebal 7d = 0 usar out_rate7d como piso
