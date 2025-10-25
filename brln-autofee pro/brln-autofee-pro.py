@@ -232,6 +232,16 @@ SEED_RATIO_MIN_FACTOR     = 0.80   # clamp do fator final por ratio
 SEED_RATIO_MAX_FACTOR     = 1.50
 AMBOSS_CACHE_TTL_SEC      = 3*3600 # reaproveita respostas por 3h
 
+# --- Suavização do lock global quando canal está saudável ---
+GLOBAL_NEG_LOCK_SOFTEN_ENABLE   = True
+SOFTEN_MIN_OUT_RATIO            = 0.60   # só suaviza se houver muita liquidez local
+SOFTEN_REQUIRE_POS_CHAN_MARGIN  = True   # só solta se margem 7d do canal >= 0
+SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.98   # pode cair até ~98% do out_ppm7d (ainda respeita PEG/FLOOR)
+
+# >>> NOVO: comportamento especial para SINK
+SINK_SKIP_SEED_CAP               = True   # não aplicar cap pelo seed em SINK
+SINK_KEEP_FLOOR_AT_REBAL_COST    = True   # garantir que o floor final não fique abaixo do piso de rebal por canal (c/ margem)
+
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
@@ -1432,15 +1442,31 @@ def main(dry_run=False):
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
             cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
-        # === Travamento quando a operação 7d está negativa ===
-        # Se a margem global 7d está negativa, não deixe cair taxa (exceto discovery/new-inbound)
-        # e aumente um pouco a reatividade para SUBIR.
+        # === Travamento quando a operação 7d está negativa (com suavização opcional) ===
         if neg_margin_global:
+            allow_soften = False
+            if GLOBAL_NEG_LOCK_SOFTEN_ENABLE:
+                # Canal saudável: muita liquidez local e margem 7d do canal >= 0 (se exigido)
+                chan_ok = (out_ratio >= SOFTEN_MIN_OUT_RATIO)
+                if SOFTEN_REQUIRE_POS_CHAN_MARGIN:
+                    chan_ok = chan_ok and (margin_ppm_7d >= 0)
+                if chan_ok and (not discovery_hit) and (not new_inbound):
+                    allow_soften = True
+
             if (target < local_ppm) and (not discovery_hit) and (not new_inbound):
-                target = local_ppm  # cancela a queda
-                global_neg_lock_applied = True
+                if allow_soften:
+                    # Permitir queda, mas limitada por PEG/FLOOR e step-cap
+                    # Se houver out_ppm_7d, não descer agressivamente abaixo dele
+                    if (out_ppm_7d or 0) > 0:
+                        peg_floor = int(round(out_ppm_7d * SOFTEN_MAX_DROP_TO_PEG_FRAC))
+                        target = max(target, peg_floor)
+                else:
+                    target = local_ppm  # mantém lock total
+                    global_neg_lock_applied = True
+
             # Mais fôlego para subir quando o global está no vermelho
             cap_frac = max(cap_frac, STEP_CAP + 0.05)
+
 
         # Extreme drain mode — acelera SUBIDAS
         if EXTREME_DRAIN_ENABLE:
@@ -1482,19 +1508,23 @@ def main(dry_run=False):
         if REBAL_FLOOR_ENABLE:
             base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
 
-            # >>> PATCH [C]: em source/router sem rebal por canal, não travar por custo global
+            # em source/router sem rebal por canal, já tinha exceção:
             if use_out_cost:
                 base_cost = 0.0
 
             if base_cost > 0:
-                floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
+                # piso de rebal "cheio" (com margem)
+                rebal_floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
+                floor_ppm = rebal_floor_ppm
             else:
+                rebal_floor_ppm = MIN_PPM
                 floor_ppm = MIN_PPM
         else:
+            rebal_floor_ppm = MIN_PPM
             floor_ppm = MIN_PPM
 
 
-        # Outrate floor dinâmico
+        # Outrate floor dinâmico (só aumenta)
         outrate_floor_active = OUTRATE_FLOOR_ENABLE
         outrate_factor = OUTRATE_FLOOR_FACTOR
         if OUTRATE_FLOOR_DYNAMIC_ENABLE:
@@ -1502,15 +1532,10 @@ def main(dry_run=False):
                 outrate_floor_active = False
             elif fwd_count < 10:
                 outrate_factor = OUTRATE_FLOOR_FACTOR_LOW
-
         if discovery_hit:
             outrate_floor_active = False
-
-        # Em SOURCE, desabilitar outrate floor
         if class_label == "source" and SOURCE_DISABLE_OUTRATE_FLOOR:
             outrate_floor_active = False
-        
-        # NEW: se não houve forwards na janela, não aplica outrate floor
         if fwd_count == 0:
             outrate_floor_active = False
 
@@ -1518,15 +1543,26 @@ def main(dry_run=False):
             outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
             floor_ppm = max(floor_ppm, outrate_floor)
 
-        # Cap do floor pelo seed (evita piso "absurdo")
-        floor_ppm = min(floor_ppm, clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR))))
-        # >>> PATCH: OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
+
+        # Cap do floor pelo seed — **pulado em SINK** (se configurado)
+        seed_cap_ppm = clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR)))
+        if not (class_label == "sink" and SINK_SKIP_SEED_CAP):
+            floor_ppm = min(floor_ppm, seed_cap_ppm)
+
+
+        # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
         outrate_peg_active = False
         if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
             outrate_peg_active = True
             outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
             floor_ppm = max(floor_ppm, outrate_peg_ppm)
-        # SINK — piso adicional e não descer abaixo de fração do seed
+
+
+        # SINK — reforço: nunca abaixo do piso de rebal por canal (com margem)
+        if class_label == "sink" and SINK_KEEP_FLOOR_AT_REBAL_COST:
+            floor_ppm = max(floor_ppm, rebal_floor_ppm)
+
+        # Regras extras existentes para SINK continuam válidas
         if class_label == "sink":
             extra = clamp_ppm(int(math.ceil((base_cost_for_margin or 0) * SINK_EXTRA_FLOOR_MARGIN)))
             floor_ppm = max(floor_ppm, extra)
