@@ -49,14 +49,14 @@ COLCHAO_PPM = 25
 LOW_OUTBOUND_THRESH = 0.05   # <5% outbound = drenado ⇒ leve alta
 HIGH_OUTBOUND_THRESH = 0.20  # >20% outbound = sobrando ⇒ leve queda
 LOW_OUTBOUND_BUMP   = 0.01   # +1% no alvo quando <5%
-HIGH_OUTBOUND_CUT   = 0.01   # -1% no alvo quando >20%
-IDLE_EXTRA_CUT      = 0.005  # corte quase nulo por ociosidade
+HIGH_OUTBOUND_CUT   = 0.02   # -2% no alvo quando >20%
+IDLE_EXTRA_CUT      = 0.015  # corte quase nulo por ociosidade
 
 # --- escalada por persistência de baixo outbound ---
 PERSISTENT_LOW_ENABLE        = True
 PERSISTENT_LOW_THRESH        = 0.10   # considera "baixo" se < 10%
 PERSISTENT_LOW_BUMP          = 0.05   # +5% no alvo por rodada de streak
-PERSISTENT_LOW_STREAK_MIN    = 3      # só começa a agir a partir de 3 rodadas seguidas
+PERSISTENT_LOW_STREAK_MIN    = 2      # só começa a agir a partir de 2 rodadas seguidas
 PERSISTENT_LOW_MAX           = 0.20   # teto de +20% acumulado
 # >>> NOVAS FLAGS:
 PERSISTENT_LOW_OVER_CURRENT_ENABLE = True  # se alvo <= taxa atual, escalar "over current"
@@ -73,7 +73,7 @@ CB_GRACE_DAYS  = 7      # janela de observação menor
 
 # --- Proteção de custo de rebal (PISO) ---
 REBAL_FLOOR_ENABLE = True      # habilita piso de segurança
-REBAL_FLOOR_MARGIN = 0.15      # 15% acima do custo médio de rebal 7d
+REBAL_FLOOR_MARGIN = 0.05      # 15% acima do custo médio de rebal 7d
 
 # --- Composição do custo no ALVO ---
 #   "global"      = usa só o custo global 7d
@@ -90,14 +90,14 @@ SEED_GUARD_ABS_MAX_PPM = 1600   # teto absoluto opcional (0/None para desativar)
 
 # --- Piso opcional pelo out_ppm7d (histórico de forwards) ---
 OUTRATE_FLOOR_ENABLE      = True
-OUTRATE_FLOOR_FACTOR      = 1.10
+OUTRATE_FLOOR_FACTOR      = 1.00
 OUTRATE_FLOOR_MIN_FWDS    = 4
 
 # >>> PATCH: OUTRATE PEG (grudar no preço observado) e ajustes de floor
 OUTRATE_PEG_ENABLE         = True     # ativa proteção para não cair abaixo do preço que já vendeu
 OUTRATE_PEG_MIN_FWDS       = 4        # bastou 4 forward na janela para reconhecer 'preço observado'
-OUTRATE_PEG_HEADROOM       = 0.01     # folga de +1% acima do outrate observado
-OUTRATE_PEG_GRACE_HOURS    = 36       # só autoriza cair abaixo do outrate após 36h desde a última mudança
+OUTRATE_PEG_HEADROOM       = 0.02     # folga de +1% acima do outrate observado
+OUTRATE_PEG_GRACE_HOURS    = 6       # só autoriza cair abaixo do outrate após 24h desde a última mudança
 OUTRATE_PEG_SEED_MULT      = 1.10     # se outrate >= 1.05x seed, trata como demanda real (fura teto seed*1.8)
 
 # =========================
@@ -112,8 +112,8 @@ STEP_CAP_IDLE_DOWN = 0.12 # fwd_count==0 & out_ratio>0.60 (queda)
 STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
 
 # Floor por canal mais robusto
-REBAL_PERCHAN_MIN_VALUE_SAT = 400_000  # 200k -> 400k: precisa sinal real para usar custo por canal
-REBAL_FLOOR_SEED_CAP_FACTOR = 1.2      # teto do floor relativo ao seed
+REBAL_PERCHAN_MIN_VALUE_SAT = 100_000  # 200k -> 400k: precisa sinal real para usar custo por canal
+REBAL_FLOOR_SEED_CAP_FACTOR = 1.20     # teto do floor relativo ao seed
 
 # Outrate floor dinâmico
 OUTRATE_FLOOR_DYNAMIC_ENABLE      = True
@@ -146,17 +146,18 @@ TOP_REVENUE_SURGE_BUMP = 0.12
 
 # MOD: Extreme drain mode (acelera SUBIDAS quando drenado crônico com demanda)
 EXTREME_DRAIN_ENABLE       = True
-EXTREME_DRAIN_STREAK       = 20     # ativa se low_streak ≥ 20
+EXTREME_DRAIN_STREAK       = 16     # ativa se low_streak ≥ 16
 EXTREME_DRAIN_OUT_MAX      = 0.03   # e out_ratio < 3%
 EXTREME_DRAIN_STEP_CAP     = 0.15   # step cap p/ SUBIR
 EXTREME_DRAIN_MIN_STEP_PPM = 15     # passo mínimo p/ SUBIR
 
 # Extreme drain TURBO (super drenado crônico)
 EXTREME_DRAIN_TURBO_ENABLE       = True
-EXTREME_DRAIN_TURBO_STREAK_MIN   = 300     #
+EXTREME_DRAIN_TURBO_STREAK_MIN   = 300     # ex.: hqq
 EXTREME_DRAIN_TURBO_OUT_MAX      = 0.01
 EXTREME_DRAIN_TURBO_STEP_CAP     = 0.20
 EXTREME_DRAIN_TURBO_MIN_STEP_PPM = 20
+
 
 # MOD: Revenue floor (piso por tráfego) p/ super-rotas muito ativas
 REVFLOOR_ENABLE            = True
@@ -181,8 +182,8 @@ SURGE_RESPECT_STEPCAP = True
 
 # ========== HISTERÉSE (COOLDOWN) ==========
 APPLY_COOLDOWN_ENABLE = True
-COOLDOWN_HOURS_UP   = 3
-COOLDOWN_HOURS_DOWN = 5
+COOLDOWN_HOURS_UP   = 1
+COOLDOWN_HOURS_DOWN = 2
 COOLDOWN_FWDS_MIN   = 2
 COOLDOWN_PROFIT_DOWN_ENABLE = True
 COOLDOWN_PROFIT_MARGIN_MIN  = 10
@@ -218,14 +219,14 @@ CLASS_MIN_VALUE_SAT            = 40_000
 SINK_BIAS_MIN                  = 0.50
 SINK_OUTRATIO_MAX              = 0.15
 SOURCE_BIAS_MIN                = 0.35
-SOURCE_OUTRATIO_MIN            = 0.58
+SOURCE_OUTRATIO_MIN            = 0.55
 ROUTER_BIAS_MAX                = 0.30
 CLASS_CONF_HYSTERESIS          = 0.10
 
 # Políticas por classe
-SINK_EXTRA_FLOOR_MARGIN        = 0.10
-SINK_MIN_OVER_SEED_FRAC        = 1.00
-SOURCE_SEED_TARGET_FRAC        = 0.60
+SINK_EXTRA_FLOOR_MARGIN        = 0.05
+SINK_MIN_OVER_SEED_FRAC        = 1.02
+SOURCE_SEED_TARGET_FRAC        = 0.55
 SOURCE_DISABLE_OUTRATE_FLOOR   = True
 ROUTER_STEP_CAP_BONUS          = 0.02
 
@@ -241,14 +242,13 @@ AMBOSS_CACHE_TTL_SEC      = 3*3600 # reaproveita respostas por 3h
 
 # --- Suavização do lock global quando canal está saudável ---
 GLOBAL_NEG_LOCK_SOFTEN_ENABLE   = True
-SOFTEN_MIN_OUT_RATIO            = 0.60   # só suaviza se houver muita liquidez local
+SOFTEN_MIN_OUT_RATIO            = 0.45   # só suaviza se houver muita liquidez local
 SOFTEN_REQUIRE_POS_CHAN_MARGIN  = True   # só solta se margem 7d do canal >= 0
-SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.98   # pode cair até ~98% do out_ppm7d (ainda respeita PEG/FLOOR)
+SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.95   # pode cair até ~98% do out_ppm7d (ainda respeita PEG/FLOOR)
 
 # >>> NOVO: comportamento especial para SINK
 SINK_SKIP_SEED_CAP               = True   # não aplicar cap pelo seed em SINK
 SINK_KEEP_FLOOR_AT_REBAL_COST    = True   # garantir que o floor final não fique abaixo do piso de rebal por canal (c/ margem)
-
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
@@ -443,6 +443,55 @@ def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
 
     return base or 0.0
 
+# >>> PATCH: pure per-channel floor base picker (no global fallback)
+def pick_floor_base_per_channel(
+    cid, seed_used, *,
+    rebal_cost_ppm_by_chan_use,
+    out_ppm_7d, fwd_count, state, now_ts:int,
+    outrate_fwds_min:int=4,
+    mem_ttl_days:int=21
+):
+    """
+    Prioridade:
+      1) rebal7d           -> 'rebal7d'
+      2) rebal21d (mem)    -> 'rebal21d'
+      3) (sem rebal)       -> None
+      4) outrate7d         -> 'outrate7d'
+      5) outrate21d (mem)  -> 'outrate21d'
+      6) Amboss (seed)     -> 'amboss'
+    Retorna: (base_ppm:float, src:str)
+    """
+    # 1) rebal7d
+    if cid in rebal_cost_ppm_by_chan_use:
+        c = float(rebal_cost_ppm_by_chan_use.get(cid) or 0.0)
+        if c > 0:
+            return c, "rebal7d"
+
+    st_m = state.get(cid, {}) or {}
+    ttl  = mem_ttl_days * 24 * 3600
+
+    # 2) rebal21d (mem)
+    last_c = float(st_m.get("last_rebal_cost_ppm", 0.0) or 0.0)
+    last_t = int(st_m.get("last_rebal_cost_ts", 0) or 0)
+    if last_c > 0 and (now_ts - last_t) <= ttl:
+        return last_c, "rebal21d"
+
+    # 3) sem rebal -> continua (None) e testa outrate
+    # 4) outrate7d
+    if (out_ppm_7d or 0) > 0 and fwd_count >= outrate_fwds_min:
+        return float(out_ppm_7d), "outrate7d"
+
+    # 5) outrate21d (mem)
+    last_o = float(st_m.get("last_outrate_ppm", 0.0) or 0.0)
+    last_ot= int(st_m.get("last_outrate_ts", 0) or 0)
+    if last_o > 0 and (now_ts - last_ot) <= ttl:
+        return last_o, "outrate21d"
+
+    # 6) Amboss
+    return float(seed_used or 0.0), "amboss"
+
+
+
 # ========== DB QUERIES ==========
 SQL_FORWARDS = """
 SELECT chan_id_in, chan_id_out, amt_in_msat, amt_out_msat, fee, forward_date
@@ -495,6 +544,14 @@ def listchannels_snapshot():
         if point:
             by_point[point] = info
     return {"by_scid_dec": by_scid_dec, "by_cid_dec": by_cid_dec, "by_point": by_point}
+
+def _norm_scid(x: str) -> str:
+    """
+    Normaliza SCID: aceita apenas dígitos puros (decimal). Retorna "" se inválido.
+    Ex.: "1002689733380145154" -> "1002689733380145154"; "2362f0ab..." -> ""
+    """
+    s = str(x or "").strip()
+    return s if s.isdigit() else ""
 
 # ========== AMBOSS ==========
 def _percentile(vals, q):
@@ -1002,9 +1059,11 @@ def main(dry_run=False):
         f = int(fee or 0)
         rebal_value_sat_global += v
         rebal_fee_sat_global   += f
-        if rebal_chan is not None:
-            perchan_value_sat[str(rebal_chan)] += v
-            perchan_fee_sat[str(rebal_chan)]   += f
+
+        rcid = _norm_scid(rebal_chan)  # ✅ usa só SCID DECIMAL
+        if rcid:
+            perchan_value_sat[rcid] += v
+            perchan_fee_sat[rcid]   += f
 
     rebal_cost_ppm_global = ppm(rebal_fee_sat_global, rebal_value_sat_global)
     rebal_cost_ppm_by_chan = {
@@ -1052,6 +1111,7 @@ def main(dry_run=False):
         alias = meta.get("alias", "Unknown")
         local_ppm = meta.get("local_ppm", 0)
         remote_ppm = int(meta.get("remote_fee_rate") or 0)   # NEW
+        floor_src = "none"
 
         # opcional: helper para não repetir
         fee_lr_str = f"💱 fee L/R {local_ppm}/{remote_ppm}ppm"  # NEW
@@ -1061,8 +1121,8 @@ def main(dry_run=False):
             cp = meta.get("chan_point")
             if cp:
                 live_info = live_by_point.get(cp)
-        if (not live_info):
-            live_info = live_by_cid.get(cid)
+        #if (not live_info):
+        #    live_info = live_by_cid.get(cid)
 
         pubkey = (live_info or {}).get("remote_pubkey") or meta.get("remote_pubkey")
         if not pubkey:
@@ -1142,6 +1202,20 @@ def main(dry_run=False):
 
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
+        
+        # >>> PATCH: memorize per-channel rebal cost (21d fallback)
+        if cid in rebal_cost_ppm_by_chan_use:
+            st_m = state.get(cid, {}).copy()
+            st_m["last_rebal_cost_ppm"] = float(rebal_cost_ppm_by_chan_use.get(cid) or 0.0)
+            st_m["last_rebal_cost_ts"]  = int(time.time())
+            state[cid] = st_m
+        # >>> PATCH: memorize per-channel outrate (21d fallback)
+        if (out_ppm_7d or 0) > 0 and fwd_count >= OUTRATE_PEG_MIN_FWDS:
+            st_m = state.get(cid, {}).copy()
+            st_m["last_outrate_ppm"] = float(out_ppm_7d)
+            st_m["last_outrate_ts"]  = int(time.time())
+            state[cid] = st_m
+
         # Flag local para marcar se aplicamos o lock global
         global_neg_lock_applied = False
         # in/out por canal p/ classificação
@@ -1203,15 +1277,6 @@ def main(dry_run=False):
         base_cost_for_margin = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
         margin_ppm_7d = int(round(out_ppm_7d - (base_cost_for_margin * (1.0 + REBAL_FLOOR_MARGIN)))) if base_cost_for_margin else int(round(out_ppm_7d))
         rev_share = (out_fee_sat.get(cid, 0) / total_out_fee_sat) if total_out_fee_sat > 0 else 0.0
-        
-        # --- Valor de rebal para exibição (7d) ---
-        if cid in rebal_cost_ppm_by_chan_use and (rebal_cost_ppm_by_chan_use.get(cid, 0) or 0) > 0:
-            rebal_ppm7d_val = int(round(rebal_cost_ppm_by_chan_use[cid]))
-            rebal_ppm7d_str = f"{rebal_ppm7d_val}"
-        else:
-            # fallback global com marcação (g)
-            rebal_ppm7d_val = int(round(rebal_cost_ppm_global or 0))
-            rebal_ppm7d_str = f"{rebal_ppm7d_val}(g)"
 
 
         # --- Alvo BASE: seed + colchão ---
@@ -1438,6 +1503,19 @@ def main(dry_run=False):
                 cap_frac = max(cap_frac, STEP_CAP_LOW_010)
             if fwd_count == 0 and out_ratio > 0.60:
                 cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
+        
+        # === Base do piso (pega fonte e custo antes de qualquer uso de floor_src) ===
+        floor_src = "none"
+        floor_base_cost = 0.0
+        # usamos a mesma prioridade do piso puro por canal (rebal7d -> rebal21d -> outrate7d -> outrate21d -> amboss)
+        floor_base_cost, floor_src = pick_floor_base_per_channel(
+            cid, seed_used,
+            rebal_cost_ppm_by_chan_use=rebal_cost_ppm_by_chan_use,
+            out_ppm_7d=out_ppm_7d, fwd_count=fwd_count,
+            state=state, now_ts=int(time.time()),
+            outrate_fwds_min=OUTRATE_PEG_MIN_FWDS,
+            mem_ttl_days=21
+        )
 
         # Discovery mode
         discovery_hit = False
@@ -1447,11 +1525,9 @@ def main(dry_run=False):
             if discovery_hard and local_ppm > target:
                 cap_frac = max(cap_frac, DISCOVERY_HARDDROP_CAP_FRAC)
                 
-        # [PATCH 2]: só permitir lock global se houver base por canal quando em per_channel
-        can_lock_globally = True
-        if (REBAL_COST_MODE or "per_channel").lower() == "per_channel":
-            if cid not in rebal_cost_ppm_by_chan_use:  # sem rebal por canal na janela
-                can_lock_globally = False
+        # >>> PATCH: lock só com base concreta local (sem usar global)
+        can_lock_globally = floor_src in ("rebal7d","rebal21d","outrate7d","outrate21d")
+
 
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
@@ -1541,73 +1617,103 @@ def main(dry_run=False):
                 raw_step_ppm = clamp_ppm(int(raw_step_ppm * (1.0 - CB_REDUCE_STEP)))
                 report.append(f"🧯 CB: {alias} ({cid}) fwd {fwd_count}<{int(baseline*CB_DROP_RATIO)} ⇒ recuo {int(CB_REDUCE_STEP*100)}%")
         
+        # Cálculo auxiliar: piso que viria do rebal por canal (para reforço em SINK)
+        rebal_floor_ppm = MIN_PPM
+        _chan_rebal = None
+        if cid in rebal_cost_ppm_by_chan_use:
+            _chan_rebal = float(rebal_cost_ppm_by_chan_use.get(cid) or 0.0)
+        elif (state.get(cid, {}).get("last_rebal_cost_ppm") or 0) > 0:
+            _chan_rebal = float(state[cid]["last_rebal_cost_ppm"])
+        if _chan_rebal and _chan_rebal > 0:
+            rebal_floor_ppm = clamp_ppm(math.ceil(_chan_rebal * (1.0 + REBAL_FLOOR_MARGIN)))
+
+        
         # ---- Floor reasons (tracking)
         floor_src = "none"
         outrate_floor = None
         outrate_peg_ppm = None
-        rebal_floor_ppm = MIN_PPM  # default; será recalculado
+        rebal_floor_ppm_track = MIN_PPM  # se precisar de uma variável “limpa” só para exibir
 
         # Piso de rebal conforme REBAL_COST_MODE
+        # >>> PATCH: pure per-channel floor (no global)
         if REBAL_FLOOR_ENABLE:
-            base_cost = pick_rebal_cost_for_floor(cid, rebal_cost_ppm_by_chan_use, rebal_cost_ppm_global)
-            # no modo per_channel, sem rebal por canal -> não usa global
-            no_chan_rebal_for_floor = (
-                (REBAL_COST_MODE or "per_channel").lower() == "per_channel"
-                and cid not in rebal_cost_ppm_by_chan_use
+            base_cost, base_src = pick_floor_base_per_channel(
+                cid, seed_used,
+                rebal_cost_ppm_by_chan_use=rebal_cost_ppm_by_chan_use,
+                out_ppm_7d=out_ppm_7d, fwd_count=fwd_count,
+                state=state, now_ts=int(time.time()),
+                outrate_fwds_min=OUTRATE_PEG_MIN_FWDS,
+                mem_ttl_days=21
             )
-            if no_chan_rebal_for_floor:
-                base_cost = 0.0
-            # em source/router sem rebal por canal, já tinha exceção:
-            if use_out_cost:
-                base_cost = 0.0
 
-            if base_cost > 0:
-                rebal_floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
-                floor_ppm = rebal_floor_ppm
-                floor_src = "rebal"
+            if base_src.startswith("rebal"):
+                # rebal → piso por custo de rebal com margem
+                floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + REBAL_FLOOR_MARGIN)))
+            elif base_src.startswith("outrate"):
+                # outrate → peg natural com headroom
+                floor_ppm = clamp_ppm(math.ceil(base_cost * (1.0 + OUTRATE_PEG_HEADROOM)))
             else:
-                rebal_floor_ppm = MIN_PPM
-                floor_ppm = MIN_PPM
-                floor_src = "none"
+                # amboss/seed → referência mínima conservadora
+                floor_ppm = clamp_ppm(int(round(max(base_cost, MIN_PPM))))
+
+            floor_src = base_src
         else:
-            rebal_floor_ppm = MIN_PPM
             floor_ppm = MIN_PPM
             floor_src = "none"
 
+        # --- Valor de rebal para exibição (7d) — agora que floor_src está definido ---
+        if floor_src == "rebal7d":
+            rebal_ppm7d_val = int(round(rebal_cost_ppm_by_chan_use.get(cid, 0) or 0))
+            rebal_ppm7d_str = f"{rebal_ppm7d_val}"
+        elif floor_src == "rebal21d":
+            rebal_ppm7d_val = int(round(state.get(cid, {}).get("last_rebal_cost_ppm", 0) or 0))
+            rebal_ppm7d_str = f"{rebal_ppm7d_val}(mem)"
+        elif floor_src == "outrate7d":
+            rebal_ppm7d_val = int(round(out_ppm_7d or 0))
+            rebal_ppm7d_str = f"{rebal_ppm7d_val}(out)"
+        elif floor_src == "outrate21d":
+            rebal_ppm7d_val = int(round(state.get(cid, {}).get("last_outrate_ppm", 0) or 0))
+            rebal_ppm7d_str = f"{rebal_ppm7d_val}(out-mem)"
+        else:
+            rebal_ppm7d_val = int(round(seed_used or 0))
+            rebal_ppm7d_str = f"{rebal_ppm7d_val}(amboss)"
 
 
-        # Outrate floor dinâmico (só aumenta)
-        outrate_floor_active = OUTRATE_FLOOR_ENABLE
-        outrate_factor = OUTRATE_FLOOR_FACTOR
-        if OUTRATE_FLOOR_DYNAMIC_ENABLE:
-            if fwd_count < OUTRATE_FLOOR_DISABLE_BELOW_FWDS:
+        # >>> PATCH: skip extra outrate-floor if base already outrate
+        if not floor_src.startswith("outrate"):
+            # Outrate floor dinâmico (só aumenta)
+            outrate_floor_active = OUTRATE_FLOOR_ENABLE
+            outrate_factor = OUTRATE_FLOOR_FACTOR
+            if OUTRATE_FLOOR_DYNAMIC_ENABLE:
+                if fwd_count < OUTRATE_FLOOR_DISABLE_BELOW_FWDS:
+                    outrate_floor_active = False
+                elif fwd_count < 10:
+                    outrate_factor = OUTRATE_FLOOR_FACTOR_LOW
+            if discovery_hit:
                 outrate_floor_active = False
-            elif fwd_count < 10:
-                outrate_factor = OUTRATE_FLOOR_FACTOR_LOW
-        if discovery_hit:
-            outrate_floor_active = False
-        if class_label == "source" and SOURCE_DISABLE_OUTRATE_FLOOR:
-            outrate_floor_active = False
-        if fwd_count == 0:
-            outrate_floor_active = False
+            if class_label == "source" and SOURCE_DISABLE_OUTRATE_FLOOR:
+                outrate_floor_active = False
+            if fwd_count == 0:
+                outrate_floor_active = False
 
-        if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
-            outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
-            prev_floor = floor_ppm
-            floor_ppm = max(floor_ppm, outrate_floor)
-            if floor_ppm != prev_floor:
-                floor_src = "outrate"
+            if outrate_floor_active and fwd_count >= OUTRATE_FLOOR_MIN_FWDS and out_ppm_7d > 0:
+                outrate_floor = clamp_ppm(math.ceil(out_ppm_7d * outrate_factor))
+                prev_floor = floor_ppm
+                floor_ppm = max(floor_ppm, outrate_floor)
+                if floor_ppm != prev_floor:
+                    floor_src = "outrate"
 
-
-        # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
-        outrate_peg_active = False
-        if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
-            outrate_peg_active = True
-            outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
-            prev_floor = floor_ppm
-            floor_ppm = max(floor_ppm, outrate_peg_ppm)
-            if floor_ppm != prev_floor:
-                floor_src = "peg"
+        # >>> PATCH: skip extra PEG if base already outrate
+        if not floor_src.startswith("outrate"):
+            # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
+            outrate_peg_active = False
+            if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
+                outrate_peg_active = True
+                outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+                prev_floor = floor_ppm
+                floor_ppm = max(floor_ppm, outrate_peg_ppm)
+                if floor_ppm != prev_floor:
+                    floor_src = "peg"
 
 
         # SINK — reforço: nunca abaixo do piso de rebal por canal (com margem)
@@ -2057,6 +2163,15 @@ def main(dry_run=False):
     if (excl_dry_up + excl_dry_down + excl_dry_kept) > 0:
         summary += f" | excl_dry up {excl_dry_up} | down {excl_dry_down} | flat {excl_dry_kept}"
     report.insert(1, summary)
+    
+    # Telemetria: quantos SCIDs de custo por canal batem com canais abertos
+    try:
+        matches = sum(1 for k in rebal_cost_ppm_by_chan_use.keys() if k in open_cids)
+        misses  = len(rebal_cost_ppm_by_chan_use) - matches
+        report.append(f"🔎 rebal-perchan match={matches} miss={misses} (SCID decimal)")
+    except Exception:
+        pass
+
 
     if unmatched > 0:
         report.append(f"ℹ️  {unmatched} canal(is) sem snapshot por scid/chan_point (out_ratio=0.50 por fallback). Cheque versão do lncli e permissões.")

@@ -38,7 +38,7 @@ LOOKBACK_DAYS = 7
 # =========================
 # Heurística pró-lucro (camadas)
 # =========================
-SAT_PROFIT_MIN       = 50_000   # lucro em sats/7d considerado “ok”
+SAT_PROFIT_MIN       = 10_000   # lucro em sats/7d considerado “ok”
 PPM_WORSE            = -200     # profit_ppm “muito ruim” (ajustado)
 PPM_MEH              = -100     # levemente ruim (ajustado)
 REQUIRED_GOOD_STREAK = 2        # janelas positivas consecutivas p/ “afrouxar”
@@ -55,8 +55,8 @@ LIMITS = {
     "OUTRATE_FLOOR_FACTOR":    (0.75, 1.35),
     "BOS_PUSH_MIN_ABS_PPM":    (5, 20),
     "BOS_PUSH_MIN_REL_FRAC":   (0.01, 0.06),
-    "COOLDOWN_HOURS_DOWN":     (3, 12),
-    "COOLDOWN_HOURS_UP":       (1, 8),
+    "COOLDOWN_HOURS_DOWN":     (2, 8),
+    "COOLDOWN_HOURS_UP":       (1, 6),
     "REBAL_BLEND_LAMBDA":      (0.0, 1.0),
     "NEG_MARGIN_SURGE_BUMP":   (0.05, 0.20),
 }
@@ -72,8 +72,8 @@ DEFAULTS = {
     "OUTRATE_FLOOR_FACTOR": 1.10,
     "BOS_PUSH_MIN_ABS_PPM": 15,
     "BOS_PUSH_MIN_REL_FRAC": 0.04,
-    "COOLDOWN_HOURS_DOWN": 6,
-    "COOLDOWN_HOURS_UP": 3,
+    "COOLDOWN_HOURS_DOWN": 2,
+    "COOLDOWN_HOURS_UP": 1,
     "REBAL_BLEND_LAMBDA": 0.30,
     "NEG_MARGIN_SURGE_BUMP": 0.05,
 }
