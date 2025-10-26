@@ -1633,6 +1633,7 @@ def main(dry_run=False):
         outrate_floor = None
         outrate_peg_ppm = None
         rebal_floor_ppm_track = MIN_PPM  # se precisar de uma variável “limpa” só para exibir
+        outrate_peg_active = False  # <- garante que exista em todos os caminhos
 
         # Piso de rebal conforme REBAL_COST_MODE
         # >>> PATCH: pure per-channel floor (no global)
@@ -1706,7 +1707,7 @@ def main(dry_run=False):
         # >>> PATCH: skip extra PEG if base already outrate
         if not floor_src.startswith("outrate"):
             # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
-            outrate_peg_active = False
+            
             if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
                 outrate_peg_active = True
                 outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
@@ -1832,7 +1833,7 @@ def main(dry_run=False):
         if (state.get(cid, {}).get("low_streak", 0) or 0) >= EXTREME_DRAIN_STREAK and (state.get(cid, {}).get("baseline_fwd7d", 0) or 0) <= 2:
             diag_tags.append("💤stale-drain")
         # >>> PATCH: tag de diagnóstico quando o PEG ficou ativo
-        if OUTRATE_PEG_ENABLE and 'outrate_peg_active' in locals() and outrate_peg_active:
+        if OUTRATE_PEG_ENABLE and outrate_peg_active:
             diag_tags.append("🧲peg")
         if DEBUG_TAGS:
             diag_tags.append(f"🔍t{target}/r{raw_step_ppm}/f{floor_ppm}")
