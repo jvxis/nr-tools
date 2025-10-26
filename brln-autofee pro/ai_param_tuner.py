@@ -1085,6 +1085,85 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
             save_meta(meta)
             return
     else:
+        # ======= NOVO: relaxar quando estivermos em good streak, mesmo sem tendência ruim =======
+        proposed = {}
+        causes = ["gate_tendencia"]  # mantemos a causa original e acrescentamos as de relax
+        deferred_note = None
+        cooldown_blocked = False
+        discard_reasons = {}
+
+        cur = load_json(OVERRIDES, {}) or {}
+        for k, v in DEFAULTS.items():
+            cur.setdefault(k, v)
+
+        if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
+            # Afrouxar por descoberta (igual ao bloco original que ficava depois)
+            if symptoms.get("discovery", 0) >= 50:
+                of = float(cur.get("OUTRATE_FLOOR_FACTOR", DEFAULTS["OUTRATE_FLOOR_FACTOR"]))
+                new_of = clamp(of - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+                if new_of != of:
+                    proposed["OUTRATE_FLOOR_FACTOR"] = new_of
+
+                plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
+                new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+                if new_plmax != plmax:
+                    proposed["PERSISTENT_LOW_MAX"] = new_plmax
+
+                if proposed:
+                    causes.append("afrouxar_por_good_streak_discovery")
+
+            # Afrouxa o cooldown de subida quando estamos em good streak
+            cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
+            new_up = clamp(cu - 1, *LIMITS["COOLDOWN_HOURS_UP"])
+            if new_up != cu and "COOLDOWN_HOURS_UP" not in proposed:
+                proposed["COOLDOWN_HOURS_UP"] = new_up
+                causes.append("afrouxar_por_good_streak_cooldown")
+
+            if proposed:
+                # Respeita limites e orçamento diário
+                proposed = apply_limits(proposed)
+                pre_budget = dict(proposed)
+                proposed = enforce_daily_budget(cur, proposed, meta)
+
+                if pre_budget and not proposed:
+                    discard_reasons = explain_discarded_changes(cur, pre_budget, proposed, meta)
+
+                # Usa o agregador (sem fast-track — é relaxamento, não dor severa)
+                if proposed:
+                    aggregated, released = apply_deferred_aggregator(cur, proposed, meta, fast_track=False)
+                    if released:
+                        proposed = aggregated
+                        deferred_note = "pacote liberado (norm>=limiar ou janela expirada)"
+                    else:
+                        proposed = {}
+                        deferred_note = "acumulando pequenas mudanças"
+
+                # Respeita o cooldown normal
+                if proposed and (not can_change_now(meta)):
+                    cooldown_blocked = True
+
+                # Se tiver algo para aplicar e não estiver bloqueado por cooldown e não for dry-run
+                if proposed and (not cooldown_blocked) and (not dry_run):
+                    cur.update(proposed)
+                    INT_KEYS = {"REVFLOOR_MIN_PPM_ABS","BOS_PUSH_MIN_ABS_PPM","COOLDOWN_HOURS_UP","COOLDOWN_HOURS_DOWN"}
+                    for k in INT_KEYS:
+                        if k in cur and isinstance(cur[k], (int, float)):
+                            cur[k] = int(round(cur[k]))
+                    save_json(OVERRIDES, cur)
+                    meta["last_change_ts"] = int(time.time())
+
+                # Telegram com o que aconteceu (aplicado, acumulado ou bloqueado)
+                if (force_telegram or (tg_enabled() and not no_telegram)):
+                    tg_msg = build_tg_message(
+                        version_info, now_local, kpis, symptoms, proposed, meta, dry_run,
+                        cooldown_blocked=cooldown_blocked, discard_reasons=discard_reasons, causes=causes, deferred_note=deferred_note
+                    )
+                    tg_send(tg_msg)
+
+                save_meta(meta)
+                return  # encerra após tratar o caminho de good streak
+
+        # ======= Sem propostas de relaxamento ou sem good streak: mantém comportamento original =======
         if verbose:
             print("KPIs 7d:", kpis)
             print("Symptoms:", symptoms)

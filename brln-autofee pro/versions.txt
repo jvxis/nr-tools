@@ -1,3 +1,4 @@
+0.3.19 - Melhoria Ai Tuner - Afrouxar indicadores em Good Streak
 0.3.18 - Melhoria Autofee e Rebal Trigger - Mais movimento canais cheios e Fallback Inteligente de Custo de Rebal
 0.3.17 - Melhoria Autofee - Turbo Drain Mode e Info Motivo do Floor
 0.3.16 - Melhoria Autofee - Comportamento de Sink cheio e sem venda
