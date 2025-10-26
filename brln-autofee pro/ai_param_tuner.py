@@ -421,6 +421,20 @@ def get_assisted_kpis(out_amt_sat_for_ppm: int):
         "assisted_used_sat": int(round(assisted_used_sat_total)),
     }
 
+def _should_relax_now(kpis, meta, symptoms):
+    # Mantém requisito de good streak para estabilidade
+    if meta.get("good_streak", 0) < REQUIRED_GOOD_STREAK:
+        return False
+    # Seus dois critérios:
+    if kpis.get("profit_ppm_out_adj", 0.0) <= 0:
+        return False
+    if kpis.get("profit_ppm_adj", -1e9) <= PPM_MEH:
+        return False
+    # (Opcional) freio extra para não aliviar em dor de margem severa
+    # if kpis.get("margin_ppm", 0.0) < -80:
+    #     return False
+    return True
+
 # =========================
 # Lógica de ajuste
 # =========================
@@ -1096,21 +1110,18 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         for k, v in DEFAULTS.items():
             cur.setdefault(k, v)
 
-        if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
-            # Afrouxar por descoberta (igual ao bloco original que ficava depois)
-            if symptoms.get("discovery", 0) >= 50:
-                of = float(cur.get("OUTRATE_FLOOR_FACTOR", DEFAULTS["OUTRATE_FLOOR_FACTOR"]))
-                new_of = clamp(of - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
-                if new_of != of:
-                    proposed["OUTRATE_FLOOR_FACTOR"] = new_of
+        if _should_relax_now(kpis, meta, symptoms):
+            of = float(cur.get("OUTRATE_FLOOR_FACTOR", DEFAULTS["OUTRATE_FLOOR_FACTOR"]))
+            new_of = clamp(of - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
+            if new_of != of:
+                proposed["OUTRATE_FLOOR_FACTOR"] = new_of
 
-                plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
-                new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
-                if new_plmax != plmax:
-                    proposed["PERSISTENT_LOW_MAX"] = new_plmax
+            plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
+            new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
+            if new_plmax != plmax:
+                proposed["PERSISTENT_LOW_MAX"] = new_plmax
 
-                if proposed:
-                    causes.append("afrouxar_por_good_streak_discovery")
+            causes.append("afrouxar_por_good_streak_ppm")
 
             # Afrouxa o cooldown de subida quando estamos em good streak
             cu = float(cur.get("COOLDOWN_HOURS_UP", DEFAULTS["COOLDOWN_HOURS_UP"]))
@@ -1178,20 +1189,20 @@ def main(dry_run=False, verbose=True, force_telegram=False, no_telegram=False):
         save_meta(meta)
         return
 
-    # Afrouxar quando em good streak + discovery alto
-    if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK and symptoms.get("discovery", 0) >= 50:
+
+    # Afrouxar quando em good streak e KPIs ok (sem usar discovery)
+    if _should_relax_now(kpis, meta, symptoms):
         of = float(cur.get("OUTRATE_FLOOR_FACTOR", DEFAULTS["OUTRATE_FLOOR_FACTOR"]))
         new_of = clamp(of - 0.01, *LIMITS["OUTRATE_FLOOR_FACTOR"])
         if "OUTRATE_FLOOR_FACTOR" not in proposed and new_of != of:
             proposed["OUTRATE_FLOOR_FACTOR"] = new_of
-        causes.append("afrouxar_por_good_streak_discovery")
 
         plmax = float(cur.get("PERSISTENT_LOW_MAX", DEFAULTS["PERSISTENT_LOW_MAX"]))
         new_plmax = clamp(plmax - 0.02, *LIMITS["PERSISTENT_LOW_MAX"])
         if "PERSISTENT_LOW_MAX" not in proposed and new_plmax != plmax:
             proposed["PERSISTENT_LOW_MAX"] = new_plmax
-        if proposed:
-            causes.append("afrouxar_por_good_streak")
+
+        causes.append("afrouxar_por_good_streak_ppm")
 
     # Afrouxa o cooldown de subida quando estamos em good streak
     if meta.get("good_streak", 0) >= REQUIRED_GOOD_STREAK:
