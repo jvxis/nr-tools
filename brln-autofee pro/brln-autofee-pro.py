@@ -250,6 +250,37 @@ SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.95   # pode cair até ~98% do out_ppm7d (ain
 SINK_SKIP_SEED_CAP               = True   # não aplicar cap pelo seed em SINK
 SINK_KEEP_FLOOR_AT_REBAL_COST    = True   # garantir que o floor final não fique abaixo do piso de rebal por canal (c/ margem)
 
+# === DIAGNÓSTICO DE MODOS ASSISTIDOS (log-only) ===
+ASSISTED_DIAG_ENABLE = True      # pode sobrescrever via env DID_ASSISTED=0/1
+FA_MIN_OUT_RATIO     = 0.70      # candidato a FIXED_ASSISTED se out_ratio>=…
+FA_REQ_NEG_MARGIN    = True      # …e margem 7d ≤ 0
+NRA_REBAL_MULT       = 1.30      # candidato a NOREBAL_ASSISTED se rebal_med ≥ mult * out_med
+NRA_REQ_NEG_MARGIN   = True      # …e margem 7d ≤ 0
+NRA_REQ_FWDS         = 1         # precisa ter pelo menos N forwards (demanda orgânica)
+
+# === EXPLORER MODE (romper platô de canal cheio e parado) ===
+EXPLORER_ENABLE               = True   # liga/desliga o modo
+EXPLORER_MIN_DAYS_STALE       = 7      # ≥7 dias sem mudança efetiva de taxa
+EXPLORER_OUT_MIN              = 0.50   # canal "cheio": out_ratio ≥ 50%
+EXPLORER_MAX_FWDS_7D          = 5      # poucos forwards em 7d
+EXPLORER_MAX_AMT_FRAC_7D      = 0.02   # ou volume de saída 7d ≤ 2% da capacidade
+EXPLORER_MAX_ROUNDS           = 3      # no máx. 3 quedas forçadas por ativação
+EXPLORER_EXIT_FWDS            = 1      # sai ao observar ≥1 forward depois de ativado
+EXPLORER_EXIT_HOURS           = 48     # ou tempo limite de 48h
+EXPLORER_STEP_CAP_DOWN        = 0.15   # passo máx. nas quedas (≥ o step cap normal)
+EXPLORER_MIN_DROP_FRAC        = 0.10   # garantir queda mínima de ~10% quando cair
+EXPLORER_SKIP_COOLDOWN_DOWN   = True   # ignorar cooldown nas quedas
+EXPLORER_BYPASS_OUTRATE       = True   # ignora outrate floor/peg enquanto explorar
+EXPLORER_BYPASS_SEEDCAP       = True   # ignora seed-cap no floor durante exploração
+EXPLORER_RESPECT_REBAL_FLOOR  = True   # NUNCA furar piso por custo de rebal
+EXPLORER_TAG                  = "🧭explorer"
+
+# --- Guard-rails para custo efetivo quando NÃO há custo por canal ---
+REBAL_COST_GLOBAL_CLAMP_LOW  = 0.60   # global não pode ficar < 60% do out_ppm7d
+REBAL_COST_GLOBAL_CLAMP_HIGH = 1.40   # nem > 140% do out_ppm7d
+REBAL_COST_BLEND_ALPHA       = 0.70   # quanto do "global_bounded" entra no blend (resto é outrate)
+APPLY_BOUNDED_COST_CLASSES = {"source", "router"}
+
 # Etiquetas
 TAG_SINK     = "🏷️sink"
 TAG_SOURCE   = "🏷️source"
@@ -414,6 +445,38 @@ def read_version_info(path: str):
     except Exception:
         pass
     return info
+
+def _median_safe(vals):
+    xs = [float(v) for v in (vals or []) if isinstance(v,(int,float))]
+    if not xs: return 0.0
+    xs.sort(); n=len(xs); m=n//2
+    return xs[m] if n%2 else (xs[m-1]+xs[m])/2.0
+
+def assisted_diag_candidates(cid, *, out_ratio:float, out_ppm7d:float, margin_ppm_7d:float,
+                             rebal_cost_ppm_by_chan_use:dict, state:dict, fwd_count:int):
+    """
+    Retorna (fa_candidate:bool, nra_candidate:bool, fa_reason:str, nra_reason:str),
+    sem alterar fee/target/state (apenas diagnóstico).
+    """
+    # "medianas" baratas (usamos single-point do 7d atual + memória de 21d para rebal por canal)
+    out_med   = float(out_ppm7d or 0.0)
+    rebal_med = float(rebal_cost_ppm_by_chan_use.get(cid, 0) or state.get(cid,{}).get("last_rebal_cost_ppm", 0) or 0)
+
+    fa_ok_ratio   = (out_ratio >= float(globals().get("FA_MIN_OUT_RATIO", 0.70)))
+    fa_ok_margin  = (margin_ppm_7d <= 0) if globals().get("FA_REQ_NEG_MARGIN", True) else True
+    fa_candidate  = bool(fa_ok_ratio and fa_ok_margin)
+
+    nra_mult      = float(globals().get("NRA_REBAL_MULT", 1.30))
+    nra_ok_cost   = (rebal_med > 0 and out_med > 0 and rebal_med >= out_med * nra_mult)
+    nra_ok_margin = (margin_ppm_7d <= 0) if globals().get("NRA_REQ_NEG_MARGIN", True) else True
+    nra_ok_fwds   = (int(fwd_count) >= int(globals().get("NRA_REQ_FWDS", 1)))
+    nra_candidate = bool(nra_ok_cost and nra_ok_margin and nra_ok_fwds)
+
+    fa_reason  = f"out_ratio {out_ratio:.2f}≥{globals().get('FA_MIN_OUT_RATIO',0.70):.2f}" + (" & marg≤0" if globals().get("FA_REQ_NEG_MARGIN",True) else "")
+    nra_reason = f"rebal_med {int(rebal_med)}≥{int(nra_mult*max(1,out_med))} (~{nra_mult:.2f}× out_med {int(out_med)})" \
+                 + (" & marg≤0" if globals().get("NRA_REQ_NEG_MARGIN",True) else "") \
+                 + (f" & fwds≥{globals().get('NRA_REQ_FWDS',1)}" if globals().get("NRA_REQ_FWDS",1) else "")
+    return fa_candidate, nra_candidate, fa_reason, nra_reason
 
 
 # === utilitário p/ piso conforme REBAL_COST_MODE ===
@@ -917,10 +980,27 @@ def build_didactic_explanation(
     except Exception:
         return "ℹ️ explicação: ajuste baseado em liquidez, custo (rebal) e demanda observada."
 
+def _get_explorer_state(st: dict, cid: str) -> dict:
+    """Retorna subestado do explorer para o canal."""
+    return (st.get(cid) or {}).get("explorer", {}) or {}
+
+def _set_explorer_state(st: dict, cid: str, **kv):
+    """Atualiza subestado do explorer para o canal."""
+    ch = st.get(cid, {}).copy()
+    expo = ch.get("explorer", {}).copy()
+    expo.update(kv)
+    ch["explorer"] = expo
+    st[cid] = ch
+
+def _clear_explorer_state(st: dict, cid: str):
+    ch = st.get(cid, {}).copy()
+    if "explorer" in ch:
+        ch.pop("explorer", None)
+    st[cid] = ch
 
 # ========== PIPELINE ==========
 def main(dry_run=False):
-    global EXCL_DRY_VERBOSE
+    global EXCL_DRY_VERBOSE,ASSISTED_DIAG_ENABLE
 
     # Override por variável de ambiente (sem quebrar compat)
     env_excl = os.getenv("EXCL_DRY_VERBOSE")
@@ -934,6 +1014,11 @@ def main(dry_run=False):
     env_did_level = os.getenv("DIDACTIC_LEVEL")
     if env_did_level and env_did_level.strip().lower() in ("basic","detailed"):
         globals()["DIDACTIC_LEVEL"] = env_did_level.strip().lower()
+        
+    env_diag = os.getenv("DID_ASSISTED")
+    if env_diag is not None:
+        ASSISTED_DIAG_ENABLE = str(env_diag).strip().lower() in ("1","true","yes","on")
+
 
     cache = load_json(CACHE_PATH, {})
     state = get_state()
@@ -1115,6 +1200,8 @@ def main(dry_run=False):
 
         # opcional: helper para não repetir
         fee_lr_str = f"💱 fee L/R {local_ppm}/{remote_ppm}ppm"  # NEW
+        extreme_turbo_applied = False
+
         # snapshot
         live_info = live_by_scid.get(cid)
         if (not live_info) and has_chan_point:
@@ -1203,6 +1290,10 @@ def main(dry_run=False):
         out_ppm_7d = ppm(out_fee_sat.get(cid, 0), out_amt_sat.get(cid, 0))
         fwd_count  = out_count.get(cid, 0)
         
+        # Fração do volume de saída 7d vs capacidade do canal (para critério do Explorer)
+        out_amt_7d = out_amt_sat.get(cid, 0)  # em sat
+        out_amt_frac_7d = (out_amt_7d / cap) if cap > 0 else 0.0
+
         # >>> PATCH: memorize per-channel rebal cost (21d fallback)
         if cid in rebal_cost_ppm_by_chan_use:
             st_m = state.get(cid, {}).copy()
@@ -1298,6 +1389,54 @@ def main(dry_run=False):
             need_big_drop_vs_seed and
             (peer_opened if initiator is not None else True)
         )
+        # === Explorer: detecção de platô e ciclo de vida ===
+        explorer_active = False
+        explorer_armed = False
+        explorer_reason = ""
+        exp_st = _get_explorer_state(state, cid)
+
+        now_ts_local = int(time.time())
+        last_change_ts = (state.get(cid, {}) or {}).get("last_ts", 0)
+        days_since_change = (now_ts_local - last_change_ts) / 86400 if last_change_ts else 999
+
+        if EXPLORER_ENABLE:
+            # Condição para armar/ativar (canal cheio e parado)
+            if not exp_st.get("active", False):
+                cond_stale = (days_since_change >= EXPLORER_MIN_DAYS_STALE)
+                cond_full  = (out_ratio >= EXPLORER_OUT_MIN)
+                cond_idle  = (fwd_count <= EXPLORER_MAX_FWDS_7D) or (out_amt_frac_7d <= EXPLORER_MAX_AMT_FRAC_7D)
+                if cond_stale and cond_full and cond_idle:
+                    explorer_armed = True
+                    explorer_active = True
+                    _set_explorer_state(
+                        state, cid,
+                        active=True,
+                        started_ts=now_ts_local,
+                        rounds=0,
+                        fwds_at_start=fwd_count,
+                        ppm_at_start=local_ppm,
+                        reason=f"stale{int(days_since_change)}d full{int(out_ratio*100)}% idle"
+                    )
+                    explorer_reason = "activate"
+            else:
+                explorer_active = True
+                # Critérios de saída: tráfego apareceu, timeout ou rounds excedidos
+                rounds = int(exp_st.get("rounds", 0))
+                fwds_since_start = max(0, fwd_count - int(exp_st.get("fwds_at_start", 0)))
+                hours_since_start = (now_ts_local - int(exp_st.get("started_ts", now_ts_local))) / 3600
+
+                if (fwds_since_start >= EXPLORER_EXIT_FWDS) or (hours_since_start >= EXPLORER_EXIT_HOURS) or (rounds >= EXPLORER_MAX_ROUNDS):
+                    explorer_active = False
+                    _clear_explorer_state(state, cid)
+                    explorer_reason = "exit"
+        if EXPLORER_ENABLE:
+            if explorer_armed:
+                # Mostra já o motivo "fresco" (mesma fórmula usada no _set_explorer_state)
+                reason_txt = f"stale{int(days_since_change)}d full{int(out_ratio*100)}% idle"
+                report.append(f"🧭 {alias} ({cid}) explorer: ON — {reason_txt}")
+            elif explorer_reason == "exit":
+                report.append(f"🧭 {alias} ({cid}) explorer: OFF (exit criteria met)")
+
 
         # --- Classificação dinâmica sink/source/router ---
         class_label = st_prev.get("class_label", "unknown")
@@ -1365,19 +1504,62 @@ def main(dry_run=False):
         if DEBUG_TAGS:
             class_tags.append(f"🧭bias{bias_ema:+.2f}")
             class_tags.append(f"🧭{class_label}:{class_conf:.2f}")
-        # >>> PATCH [A]: usar out_ppm7d como custo efetivo p/ source/router sem rebal por canal
-        use_out_cost = False
-        no_chan_rebal = (perchan_value_sat.get(cid, 0) == 0)
+        # --- [PATCH A] Base de custo p/ margem (consistente) ---
+        # Usa custo por canal se existir; caso contrário, em SOURCE/ROUTER usa out_ppm7d (com clamp+blend);
+        # para SINK ou quando faltar dado, cai no global cru.
+        rebal_cost_chan = float(rebal_cost_ppm_by_chan_use.get(cid, 0) or 0)
 
-        if class_label in ("source", "router") and no_chan_rebal and (out_ppm_7d or 0) > 0:
+        use_bounded   = (class_label or "").lower() in APPLY_BOUNDED_COST_CLASSES  # aplica só em source/router
+        use_out_cost  = False
+        base_cost_for_margin = 0.0
+
+        if rebal_cost_chan > 0:
+            # 1) custo por canal vence
+            base_cost_for_margin = rebal_cost_chan
+
+        elif use_bounded and (rebal_cost_ppm_global or 0) > 0 and (out_ppm_7d or 0) > 0:
+            # 2) SOURCE/ROUTER sem rebal por canal: clamp no global pelo preço "out"
+            lo = out_ppm_7d * REBAL_COST_GLOBAL_CLAMP_LOW
+            hi = out_ppm_7d * REBAL_COST_GLOBAL_CLAMP_HIGH
+            global_bounded = max(lo, min(float(rebal_cost_ppm_global), hi))
+
+            blended = REBAL_COST_BLEND_ALPHA * global_bounded + (1.0 - REBAL_COST_BLEND_ALPHA) * float(out_ppm_7d)
+
+            # Cap pró-margem: não permitir “custo” acima do que gerou venda com margem
+            if REBAL_FLOOR_MARGIN > 0:
+                cap_ok = float(out_ppm_7d) / (1.0 + REBAL_FLOOR_MARGIN)
+                blended = min(blended, cap_ok)
+
+            base_cost_for_margin = blended
             use_out_cost = True
-            # Trate o "custo" como o preço já observado de venda (out_ppm7d)
-            base_cost_for_margin = float(out_ppm_7d)
-            # Margem compara "preço realizado" vs "custo" (com a mesma margem de piso)
-            margin_ppm_7d = int(round(out_ppm_7d - (base_cost_for_margin * (1.0 + REBAL_FLOOR_MARGIN))))
-            # Exibir de forma clara que o "rebal_ppm7d" aqui está vindo do out_ppm (não do gui_payments)
-            rebal_ppm7d_val = int(round(out_ppm_7d))
-            rebal_ppm7d_str = f"{rebal_ppm7d_val}(out)"
+
+        else:
+            # 3) SINK (ou sem dados): global cru
+            base_cost_for_margin = float(rebal_cost_ppm_global or 0)
+
+        base_cost_for_margin = max(float(base_cost_for_margin or 0), float(MIN_PPM))
+        margin_ppm_7d = int(round((out_ppm_7d or 0) - base_cost_for_margin * (1.0 + REBAL_FLOOR_MARGIN)))
+            
+        # === Diagnóstico passivo dos modos assistidos (LOG-ONLY) ===
+        if ASSISTED_DIAG_ENABLE:
+            fa_cand, nra_cand, fa_reason, nra_reason = assisted_diag_candidates(
+                cid,
+                out_ratio=out_ratio,
+                out_ppm7d=out_ppm_7d,
+                margin_ppm_7d=margin_ppm_7d,
+                rebal_cost_ppm_by_chan_use=rebal_cost_ppm_by_chan_use,
+                state=state,
+                fwd_count=fwd_count
+            )
+            if fa_cand:
+                class_tags.append(f"🧩FA-candidate")
+                if DEBUG_TAGS:
+                    class_tags.append(f"ⓘFA:{fa_reason}")
+            if nra_cand:
+                class_tags.append(f"🧩NRA-candidate")
+                if DEBUG_TAGS:
+                    class_tags.append(f"ⓘNRA:{nra_reason}")
+
 
         # --- Escalada por persistência (ANTES do ajuste de liquidez) ---
         streak = state.get(cid, {}).get("low_streak", 0)
@@ -1504,18 +1686,7 @@ def main(dry_run=False):
             if fwd_count == 0 and out_ratio > 0.60:
                 cap_frac = max(cap_frac, STEP_CAP_IDLE_DOWN)
         
-        # === Base do piso (pega fonte e custo antes de qualquer uso de floor_src) ===
-        floor_src = "none"
-        floor_base_cost = 0.0
-        # usamos a mesma prioridade do piso puro por canal (rebal7d -> rebal21d -> outrate7d -> outrate21d -> amboss)
-        floor_base_cost, floor_src = pick_floor_base_per_channel(
-            cid, seed_used,
-            rebal_cost_ppm_by_chan_use=rebal_cost_ppm_by_chan_use,
-            out_ppm_7d=out_ppm_7d, fwd_count=fwd_count,
-            state=state, now_ts=int(time.time()),
-            outrate_fwds_min=OUTRATE_PEG_MIN_FWDS,
-            mem_ttl_days=21
-        )
+        
 
         # Discovery mode
         discovery_hit = False
@@ -1599,6 +1770,16 @@ def main(dry_run=False):
         # bônus leve de reatividade em ROUTER
         if class_label == "router":
             cap_frac = min(0.50, cap_frac + ROUTER_STEP_CAP_BONUS)
+        
+        # >>> ITEM 6: TARGET/STEPCAP – quedas mais rápidas e com queda mínima
+        # Explorer acelera a queda e garante um drop mínimo por rodada
+        if EXPLORER_ENABLE and explorer_active and target < local_ppm:
+            # acelera a QUEDA: usa step-cap especial do Explorer (>= ao cap atual)
+            cap_frac = max(cap_frac, EXPLORER_STEP_CAP_DOWN)
+            # garante uma QUEDA MÍNIMA proporcional à taxa atual
+            min_drop_ppm = int(math.ceil(local_ppm * EXPLORER_MIN_DROP_FRAC))
+            target = min(target, local_ppm - min_drop_ppm)
+
 
         raw_step_ppm = target if local_ppm == 0 else apply_step_cap2(
             local_ppm, target, cap_frac,
@@ -1684,6 +1865,8 @@ def main(dry_run=False):
         if not floor_src.startswith("outrate"):
             # Outrate floor dinâmico (só aumenta)
             outrate_floor_active = OUTRATE_FLOOR_ENABLE
+            if EXPLORER_ENABLE and explorer_active and EXPLORER_BYPASS_OUTRATE:
+                outrate_floor_active = False
             outrate_factor = OUTRATE_FLOOR_FACTOR
             if OUTRATE_FLOOR_DYNAMIC_ENABLE:
                 if fwd_count < OUTRATE_FLOOR_DISABLE_BELOW_FWDS:
@@ -1709,12 +1892,14 @@ def main(dry_run=False):
             # >>> OUTRATE PEG — cola o piso no preço observado (independente do outrate_floor)
             
             if OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d > 0:
-                outrate_peg_active = True
-                outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
-                prev_floor = floor_ppm
-                floor_ppm = max(floor_ppm, outrate_peg_ppm)
-                if floor_ppm != prev_floor:
-                    floor_src = "peg"
+                if not (EXPLORER_ENABLE and explorer_active and EXPLORER_BYPASS_OUTRATE):
+                    outrate_peg_active = True
+                    outrate_peg_ppm = clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM))))
+                
+                    prev_floor = floor_ppm
+                    floor_ppm = max(floor_ppm, outrate_peg_ppm)
+                    if floor_ppm != prev_floor:
+                        floor_src = "peg"
 
 
         # SINK — reforço: nunca abaixo do piso de rebal por canal (com margem)
@@ -1733,11 +1918,18 @@ def main(dry_run=False):
                 floor_src = "sink-extra"
         # Cap do floor pelo seed — pulado em SINK se configurado
         seed_cap_ppm = clamp_ppm(int(math.ceil(seed_used * REBAL_FLOOR_SEED_CAP_FACTOR)))
-        if not (class_label == "sink" and SINK_SKIP_SEED_CAP):
+        apply_seed_cap = True
+        if (class_label == "sink" and SINK_SKIP_SEED_CAP):
+            apply_seed_cap = False
+        if EXPLORER_ENABLE and explorer_active and EXPLORER_BYPASS_SEEDCAP:
+            apply_seed_cap = False
+
+        if apply_seed_cap:
             prev_floor = floor_ppm
             floor_ppm = min(floor_ppm, seed_cap_ppm)
             if floor_ppm != prev_floor and floor_src not in ("peg", "outrate", "rebal", "sink-extra"):
                 floor_src = "seed-cap"
+
 
         # ⬇️ NOVO: em discovery, desligar piso de rebal (deixa só o MIN_PPM)
         if discovery_hit:
@@ -1745,6 +1937,16 @@ def main(dry_run=False):
             floor_ppm = max(MIN_PPM, min(floor_ppm, MIN_PPM))
             if floor_ppm != prev_floor:
                 floor_src = "none"
+                
+        # === EXPLORER 5.3: respeitar piso de rebal mesmo explorando ===
+        # Garante que, durante o Explorer, o floor nunca fique abaixo do custo de rebal por canal (com margem),
+        # mesmo se o Discovery tiver zerado o piso.
+        if EXPLORER_ENABLE and explorer_active and EXPLORER_RESPECT_REBAL_FLOOR:
+            if floor_ppm < rebal_floor_ppm:
+                floor_ppm = rebal_floor_ppm
+                if floor_src not in ("peg", "outrate"):
+                    floor_src = "rebal"
+
 
         # Cálculo final com piso
         final_ppm = max(raw_step_ppm, floor_ppm)
@@ -1816,8 +2018,12 @@ def main(dry_run=False):
         if lock_skip_tag:
             diag_tags.append(lock_skip_tag)
             
-        if 'extreme_turbo_applied' in locals() and extreme_turbo_applied:
+        if extreme_turbo_applied:
             diag_tags.append("🚀extreme-drain+")
+        
+        if EXPLORER_ENABLE and explorer_active:
+            diag_tags.append(EXPLORER_TAG)
+
 
 
         # marcações de contexto
@@ -1886,6 +2092,15 @@ def main(dry_run=False):
         fwds_since = max(0, fwd_count - fwds_at_change)
         cooldown_blocked = False
         if APPLY_COOLDOWN_ENABLE and new_ppm != local_ppm and not push_forced_by_floor:
+            # Explorer: ignorar cooldown para quedas, se configurado
+            if (EXPLORER_ENABLE and explorer_active and EXPLORER_SKIP_COOLDOWN_DOWN
+                and new_ppm != local_ppm and new_ppm < local_ppm
+                and not push_forced_by_floor):
+                # anula qualquer bloqueio prévio de cooldown
+                will_push = True
+                cooldown_blocked = False
+                # remove tags de cooldown adicionadas antes (se houver)
+                all_tags = [t for t in all_tags if not t.startswith("⏳cooldown")]
             # em discovery e QUEDA, não aplicar cooldown
             if discovery_hit and new_ppm < local_ppm:
                 pass
@@ -1953,6 +2168,9 @@ def main(dry_run=False):
             discovery_hit=bool(discovery_hit),   # ← usar a variável booleana já calculada
             cooldown_needed_hours=cooldown_needed_hours
         )
+        if EXPLORER_ENABLE and explorer_active and new_ppm < local_ppm:
+            prediction_msg = prediction_msg.replace("previsão:", "previsão (explorer):")
+
 
 
         # ===== DRY RUN / EXCLUIR =====
@@ -1983,6 +2201,10 @@ def main(dry_run=False):
             if act_dry:
                 if is_excluded and not EXCL_DRY_VERBOSE:
                     report.append(f"✅{emo} {alias}: 🚷excl-dry")
+                    # Explorer: contabiliza round de queda aplicada
+                    if EXPLORER_ENABLE and explorer_active and new_ppm < local_ppm:
+                        rounds = int(_get_explorer_state(state, cid).get("rounds", 0)) + 1
+                        _set_explorer_state(state, cid, rounds=rounds)
                     if new_ppm > local_ppm: excl_dry_up += 1
                     else: excl_dry_down += 1
                 else:
@@ -2034,6 +2256,10 @@ def main(dry_run=False):
 
                         # baseline EMA (70/30) se houver amostra >0
                         st = state.get(cid, {}).copy()
+                        # Explorer: contabiliza round de queda aplicada
+                        if EXPLORER_ENABLE and explorer_active and new_ppm < local_ppm:
+                            rounds = int(_get_explorer_state(state, cid).get("rounds", 0)) + 1
+                            _set_explorer_state(state, cid, rounds=rounds)
                         old_base = st.get("baseline_fwd7d", 0)
                         if fwd_count > 0:
                             if old_base and old_base > 0:
