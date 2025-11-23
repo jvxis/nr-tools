@@ -48,7 +48,7 @@ COLCHAO_PPM = 25
 # --- política de variação por liquidez (faixa morta: 5%–30%) ---
 LOW_OUTBOUND_THRESH = 0.05   # <5% outbound = drenado ⇒ leve alta
 HIGH_OUTBOUND_THRESH = 0.20  # >20% outbound = sobrando ⇒ leve queda
-LOW_OUTBOUND_BUMP   = 0.01   # +1% no alvo quando <5%
+LOW_OUTBOUND_BUMP   = 0.02   # +2% no alvo quando <5%
 HIGH_OUTBOUND_CUT   = 0.02   # -2% no alvo quando >20%
 IDLE_EXTRA_CUT      = 0.015  # corte quase nulo por ociosidade
 
@@ -56,11 +56,11 @@ IDLE_EXTRA_CUT      = 0.015  # corte quase nulo por ociosidade
 PERSISTENT_LOW_ENABLE        = True
 PERSISTENT_LOW_THRESH        = 0.10   # considera "baixo" se < 10%
 PERSISTENT_LOW_BUMP          = 0.05   # +5% no alvo por rodada de streak
-PERSISTENT_LOW_STREAK_MIN    = 2      # só começa a agir a partir de 2 rodadas seguidas
-PERSISTENT_LOW_MAX           = 0.20   # teto de +20% acumulado
+PERSISTENT_LOW_STREAK_MIN    = 1      # só começa a agir a partir de 1 rodada seguidas
+PERSISTENT_LOW_MAX           = 0.25   # teto de +25% acumulado
 # >>> NOVAS FLAGS:
 PERSISTENT_LOW_OVER_CURRENT_ENABLE = True  # se alvo <= taxa atual, escalar "over current"
-PERSISTENT_LOW_MIN_STEP_PPM        = 5     # passo mínimo quando escalando "over current"
+PERSISTENT_LOW_MIN_STEP_PPM        = 10     # passo mínimo quando escalando "over current"
 
 # --- peso do volume de ENTRADA do peer (Amboss) no alvo ---
 VOLUME_WEIGHT_ALPHA = 0.20  # MOD: 0.10 → 0.20 (ponderação de entrada mais forte)
@@ -73,7 +73,7 @@ CB_GRACE_DAYS  = 7      # janela de observação menor
 
 # --- Proteção de custo de rebal (PISO) ---
 REBAL_FLOOR_ENABLE = True      # habilita piso de segurança
-REBAL_FLOOR_MARGIN = 0.05      # 15% acima do custo médio de rebal 7d
+REBAL_FLOOR_MARGIN = 0.10      # 10% acima do custo médio de rebal 7d
 
 # --- Composição do custo no ALVO ---
 #   "global"      = usa só o custo global 7d
@@ -96,8 +96,8 @@ OUTRATE_FLOOR_MIN_FWDS    = 4
 # >>> PATCH: OUTRATE PEG (grudar no preço observado) e ajustes de floor
 OUTRATE_PEG_ENABLE         = True     # ativa proteção para não cair abaixo do preço que já vendeu
 OUTRATE_PEG_MIN_FWDS       = 4        # bastou 4 forward na janela para reconhecer 'preço observado'
-OUTRATE_PEG_HEADROOM       = 0.02     # folga de +1% acima do outrate observado
-OUTRATE_PEG_GRACE_HOURS    = 6       # só autoriza cair abaixo do outrate após 24h desde a última mudança
+OUTRATE_PEG_HEADROOM       = 0.05     # folga de +1% acima do outrate observado
+OUTRATE_PEG_GRACE_HOURS    = 16       # só autoriza cair abaixo do outrate após 24h desde a última mudança
 OUTRATE_PEG_SEED_MULT      = 1.10     # se outrate >= 1.05x seed, trata como demanda real (fura teto seed*1.8)
 
 # =========================
@@ -112,7 +112,7 @@ STEP_CAP_IDLE_DOWN = 0.12 # fwd_count==0 & out_ratio>0.60 (queda)
 STEP_MIN_STEP_PPM = 5     # passo mínimo em ppm
 
 # Floor por canal mais robusto
-REBAL_PERCHAN_MIN_VALUE_SAT = 100_000  # 200k -> 400k: precisa sinal real para usar custo por canal
+REBAL_PERCHAN_MIN_VALUE_SAT = 200_000  # 200k -> 400k: precisa sinal real para usar custo por canal
 REBAL_FLOOR_SEED_CAP_FACTOR = 1.20     # teto do floor relativo ao seed
 
 # Outrate floor dinâmico
@@ -147,7 +147,7 @@ TOP_REVENUE_SURGE_BUMP = 0.12
 # MOD: Extreme drain mode (acelera SUBIDAS quando drenado crônico com demanda)
 EXTREME_DRAIN_ENABLE       = True
 EXTREME_DRAIN_STREAK       = 16     # ativa se low_streak ≥ 16
-EXTREME_DRAIN_OUT_MAX      = 0.03   # e out_ratio < 3%
+EXTREME_DRAIN_OUT_MAX      = 0.04   # e out_ratio < 4%
 EXTREME_DRAIN_STEP_CAP     = 0.15   # step cap p/ SUBIR
 EXTREME_DRAIN_MIN_STEP_PPM = 15     # passo mínimo p/ SUBIR
 
@@ -182,8 +182,8 @@ SURGE_RESPECT_STEPCAP = True
 
 # ========== HISTERÉSE (COOLDOWN) ==========
 APPLY_COOLDOWN_ENABLE = True
-COOLDOWN_HOURS_UP   = 1
-COOLDOWN_HOURS_DOWN = 2
+COOLDOWN_HOURS_UP   = 2
+COOLDOWN_HOURS_DOWN = 3
 COOLDOWN_FWDS_MIN   = 2
 COOLDOWN_PROFIT_DOWN_ENABLE = True
 COOLDOWN_PROFIT_MARGIN_MIN  = 10
@@ -249,6 +249,10 @@ SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.95   # pode cair até ~98% do out_ppm7d (ain
 # >>> NOVO: comportamento especial para SINK
 SINK_SKIP_SEED_CAP               = True   # não aplicar cap pelo seed em SINK
 SINK_KEEP_FLOOR_AT_REBAL_COST    = True   # garantir que o floor final não fique abaixo do piso de rebal por canal (c/ margem)
+# Soft-ceiling adicional por SINK quente (evita travar em 3000 à toa)
+SINK_SOFT_CEIL_ENABLE = True
+SINK_SOFT_CEIL_P95_MULT = 1.10  # teto suave = min(seed*1.8, p95*1.1, MAX_PPM)
+
 
 # === DIAGNÓSTICO DE MODOS ASSISTIDOS (log-only) ===
 ASSISTED_DIAG_ENABLE = True      # pode sobrescrever via env DID_ASSISTED=0/1
@@ -280,6 +284,13 @@ REBAL_COST_GLOBAL_CLAMP_LOW  = 0.60   # global não pode ficar < 60% do out_ppm7
 REBAL_COST_GLOBAL_CLAMP_HIGH = 1.40   # nem > 140% do out_ppm7d
 REBAL_COST_BLEND_ALPHA       = 0.70   # quanto do "global_bounded" entra no blend (resto é outrate)
 APPLY_BOUNDED_COST_CLASSES = {"source", "router"}
+
+# ======== CONFIG NOVA SINK LUCRATIVO DRENADO (Subir mais rapido ao Alvo)========
+MIN_SOFT_CEILING = 100          # piso global de teto "suave" (antes era 800 fixo)
+SEED_CEILING_MULT = 1.5          # já existia como 1.5 no seu cálculo
+SEED_FLOOR_MULT   = 1.10         # garante coerência mínima com o seed
+P65_BOOST         = 1.15         # se tiver p65, dá um leve boost
+SINK_MIN_MARGIN = 200          # margem mínima em ppm para ativar o turbo sink lucrativo 
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
@@ -478,6 +489,11 @@ def assisted_diag_candidates(cid, *, out_ratio:float, out_ppm7d:float, margin_pp
                  + (f" & fwds≥{globals().get('NRA_REQ_FWDS',1)}" if globals().get("NRA_REQ_FWDS",1) else "")
     return fa_candidate, nra_candidate, fa_reason, nra_reason
 
+def _apply_sink_soft_ceiling(target_ppm: int, seed_ppm: int, p95_ppm: int) -> int:
+    if not SINK_SOFT_CEIL_ENABLE:
+        return target_ppm
+    soft_ceil = min(int(seed_ppm * SEED_CEILING_MULT), int(p95_ppm * SINK_SOFT_CEIL_P95_MULT), MAX_PPM)
+    return min(target_ppm, soft_ceil)
 
 # === utilitário p/ piso conforme REBAL_COST_MODE ===
 def pick_rebal_cost_for_floor(cid, perchan_cost_map, global_cost):
@@ -1696,8 +1712,29 @@ def main(dry_run=False):
             if discovery_hard and local_ppm > target:
                 cap_frac = max(cap_frac, DISCOVERY_HARDDROP_CAP_FRAC)
                 
-        # >>> PATCH: lock só com base concreta local (sem usar global)
-        can_lock_globally = floor_src in ("rebal7d","rebal21d","outrate7d","outrate21d")
+        # >>> FIX: lock só com base concreta local (sem depender de floor_src ainda não decidido)
+        st_m = state.get(cid, {}) or {}
+        ttl = 21 * 24 * 3600
+        now_ts = int(time.time())
+
+        has_recent_rebal = (
+            (cid in rebal_cost_ppm_by_chan_use and (rebal_cost_ppm_by_chan_use.get(cid) or 0) > 0)
+            or (
+                (st_m.get("last_rebal_cost_ppm") or 0) > 0
+                and (now_ts - int(st_m.get("last_rebal_cost_ts") or 0) <= ttl)
+            )
+        )
+
+        has_recent_outrate = (
+            ((out_ppm_7d or 0) > 0 and fwd_count >= OUTRATE_PEG_MIN_FWDS)
+            or (
+                (st_m.get("last_outrate_ppm") or 0) > 0
+                and (now_ts - int(st_m.get("last_outrate_ts") or 0) <= ttl)
+            )
+        )
+
+        can_lock_globally = bool(has_recent_rebal or has_recent_outrate)
+
 
 
         # NEW INBOUND: step cap maior só para reduzir
@@ -1963,19 +2000,44 @@ def main(dry_run=False):
             pref = clamp_ppm(int(seed_used * SOURCE_SEED_TARGET_FRAC))
             final_ppm = min(final_ppm, pref)
 
-        # Clamp final com teto local por canal (barreira suave)
-        # >>> PATCH: TETO condicional — preserva demanda observada
-        local_max = min(MAX_PPM, max(800, int(seed_used * 1.8)))
-
-        # exceções: se há demanda, não estrangular pelo teto ancorado no seed
-        demand_exception = (
-            (OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d >= seed_used * OUTRATE_PEG_SEED_MULT)
-            or (out_ratio < PERSISTENT_LOW_THRESH)   # drenado: não forçar queda por teto
+        # 1) Âncoras dinâmicas
+        base_ceiling = int(seed_used * SEED_CEILING_MULT)
+        seed_floor   = int(seed_used * SEED_FLOOR_MULT)
+        p95_floor    = int((seed_p95 or seed_used) * P65_BOOST)
+        
+        # 2) Teto base: NÃO usa final_ppm como âncora, só referências "de mercado"
+        local_max = min(
+            MAX_PPM,
+            max(MIN_SOFT_CEILING, base_ceiling, seed_floor, p95_floor)
         )
 
-        if demand_exception and out_ppm_7d > 0:
-            # autoriza teto pelo outrate (com folga do PEG)
-            local_max = max(local_max, clamp_ppm(int(round(out_ppm_7d * (1.0 + OUTRATE_PEG_HEADROOM)))))
+        # 3) Turbo para SINK super drenado e com margem ≥ 0  (mantém igual)
+        if class_label == "sink" and out_ratio < PERSISTENT_LOW_THRESH and margin_ppm_7d >= SINK_MIN_MARGIN:
+            local_max = MAX_PPM
+        else:
+            # Exceções de demanda: se há demanda real, não estrangular pelo teto
+            demand_exception = (
+                (OUTRATE_PEG_ENABLE and fwd_count >= OUTRATE_PEG_MIN_FWDS and out_ppm_7d >= seed_used * OUTRATE_PEG_SEED_MULT)
+                or (out_ratio < PERSISTENT_LOW_THRESH)  # drenado: não forçar queda por teto
+            )
+            if demand_exception:
+                # Libera mais espaço: respeita demanda observada
+                local_max = min(
+                    MAX_PPM,
+                    max(local_max, int(seed_used * OUTRATE_PEG_SEED_MULT), int(out_ppm_7d or 0))
+                )
+
+        # 3b) Teto especial para SOURCE: não faz sentido virar MAX_PPM se é "source"
+        if class_label == "source":
+            # cap básico: perto do seed (ex.: 1.1x seed)
+            src_cap = int(seed_used * 1.10)
+            # se já temos out_ppm observado, não subir muito acima disso
+            if (out_ppm_7d or 0) > 0:
+                src_cap = min(src_cap, int(out_ppm_7d * 1.10))
+
+            # garante que o teto do source seja bem abaixo de MAX_PPM
+            local_max = min(local_max, clamp_ppm(src_cap))
+
 
         # ⛏️ FIX: primeiro clamp no teto, depois REAPLICA o step-cap para não “degolar” em 1 rodada
         final_ppm_preclamp = int(round(final_ppm))

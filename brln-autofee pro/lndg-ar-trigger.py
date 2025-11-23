@@ -91,14 +91,6 @@ CLASS_BIAS = {
 BIAS_MAX_PP = 12
 BIAS_HARD_CLAMP_PP = 20  # clamp duro de segurança
 
-def demand_bonus(baseline_fwds: int) -> float:
-    """Bônus por demanda (baseline de fwds 7d salvo no state do AutoFee)."""
-    if baseline_fwds >= 150:
-        return 0.08   # +8pp
-    if baseline_fwds >= 50:
-        return 0.04   # +4pp
-    return 0.00
-
 # ===== ROI-CAP MELHORADO =====
 # Fator "custo_7d <= frac * preco" por classe
 ROI_CAP_FRAC_DEFAULT = 0.70
@@ -128,6 +120,14 @@ FORCE_SOURCE_LIST = set([
 # =========================
 # Utilidades
 # =========================
+def demand_bonus(baseline_fwds: int) -> float:
+    """Bônus por demanda (baseline de fwds 7d salvo no state do AutoFee)."""
+    if baseline_fwds >= 150:
+        return 0.08   # +8pp
+    if baseline_fwds >= 50:
+        return 0.04   # +4pp
+    return 0.00
+
 def read_version_info(path: str) -> Dict[str, str]:
     """
     Lê a primeira linha útil (não vazia e não começando com '#') do arquivo de versões.
@@ -354,20 +354,24 @@ def load_rebal_costs(db_path: str, lookback_days: int = 7):
     global_cost_ppm = ppm(total_f, total_v)
     return per_cost_ppm, global_cost_ppm, per_value, per_count
 
-# >>> PATCH: per-channel ROI base (no global)
+# >>> PATCH: per-channel ROI base (apenas custos reais de rebal)
 def pick_roi_base_ppm(
     cid:str, *,
     per_rebal_ppm:Dict[str,float],
-    out_ppm_7d:float, out_fwds_7d:int,
+    out_ppm_7d:float,
+    out_fwds_7d:int,
     state:Dict[str,Any],
     last_seed:Optional[float],
-    now_ts:int, mem_ttl_days:int=21, outrate_fwds_min:int=4
+    now_ts:int,
+    mem_ttl_days:int=21,
+    outrate_fwds_min:int=4
 ):
     """
-    Retorna (base_ppm, src) seguindo:
-      rebal7d → rebal21d(mem) → outrate7d → outrate21d(mem) → amboss(seed)
+    Para o TRIGGER de AR, usamos apenas custos reais de rebal:
+      rebal7d → rebal21d(mem).
+    Se não houver, devolve 0 e 'none' (não bloqueia por custo/ROI).
     """
-    # 1) rebal7d
+    # 1) custo médio de rebal nos últimos N dias (LNDg gui_payments)
     c7 = float(per_rebal_ppm.get(cid, 0.0) or 0.0)
     if c7 > 0:
         return c7, "rebal7d"
@@ -375,26 +379,13 @@ def pick_roi_base_ppm(
     st = state.get(cid, {}) or {}
     ttl = mem_ttl_days * 24 * 3600
 
-    # 2) rebal21d (mem)
+    # 2) custo de rebal memorizado pelo AutoFee (janela maior)
     lc = float(st.get("last_rebal_cost_ppm", 0.0) or 0.0)
     lt = int(st.get("last_rebal_cost_ts", 0) or 0)
     if lc > 0 and (now_ts - lt) <= ttl:
         return lc, "rebal21d"
 
-    # 3) outrate7d
-    if (out_ppm_7d or 0) > 0 and out_fwds_7d >= outrate_fwds_min:
-        return float(out_ppm_7d), "outrate7d"
-
-    # 4) outrate21d (mem)
-    lo = float(st.get("last_outrate_ppm", 0.0) or 0.0)
-    lot= int(st.get("last_outrate_ts", 0) or 0)
-    if lo > 0 and (now_ts - lot) <= ttl:
-        return lo, "outrate21d"
-
-    # 5) Amboss seed
-    if last_seed is not None and last_seed > 0:
-        return float(last_seed), "amboss"
-
+    # 3) sem custo real de rebal → não usar custo para bloquear AR
     return 0.0, "none"
 
 # =========================
@@ -478,17 +469,19 @@ def profitable(local_ppm: int, remote_ppm: int,
     mot = (f"💵 margem {margin}ppm {'≥' if ok else '<'} "
            f"🧮 custo_7d({fonte}) {int(base_cost)}ppm × {REBAL_SAFETY:.2f} + {int(BREAKEVEN_BUFFER*100)}% ≈ {need}ppm")
     return ok, mot
+
 # >>> PATCH: lucro sem fallback global (usa uma única base passada pelo caller)
 def profitable_noglobal(local_ppm: int, remote_ppm: int,
                         base_cost_ppm: Optional[float]) -> Tuple[bool, str]:
     """
     Lucro se margem_ppm ≥ base_cost * REBAL_SAFETY * (1+BREAKEVEN_BUFFER).
-    A base_cost já vem da ordem per-channel (rebal7d → rebal21d(mem) → outrate7d → outrate21d(mem) → seed).
+    Quando não há base_cost (sem custo real de rebal), não bloqueia: considera ok por padrão.
     """
     margin = max(0, int(local_ppm) - int(remote_ppm))
     base_cost = float(base_cost_ppm or 0.0)
     if base_cost <= 0:
-        return False, f"💵 margem {margin}ppm < custo_base indisponível"
+        # sem custo real de rebal: não usamos esse gate para bloquear AR
+        return True, f"💵 margem {margin}ppm (sem custo_base; ok por padrão)"
     need_base = math.ceil(base_cost * REBAL_SAFETY)
     need = math.ceil(need_base * (1.0 + BREAKEVEN_BUFFER))
     ok = margin >= need
@@ -690,14 +683,16 @@ async def main():
             if cls_eff == "source":
                 out_tgt, in_tgt = 5, 95  # política source: alvo fixo 5/95
 
-            # Custo 7d: usar canal só se confiável; senão global
+            # Custo 7d: usar canal só se confiável; senão global (apenas para log/info)
             ch_val_sat = int(per_value_sat.get(cid, 0))
             ch_cnt     = int(per_count.get(cid, 0))
             ch_cost_raw = per_cost_ppm.get(cid)
-            use_ch_cost = (ch_cost_raw is not None and ch_cost_raw > 0 and ch_val_sat >= MIN_REBAL_VALUE_SAT and ch_cnt >= MIN_REBAL_COUNT)
+            use_ch_cost = (ch_cost_raw is not None and ch_cost_raw > 0
+                           and ch_val_sat >= MIN_REBAL_VALUE_SAT
+                           and ch_cnt >= MIN_REBAL_COUNT)
             ch_cost = ch_cost_raw if use_ch_cost else None
 
-            # >>> PATCH: escolher base per-channel (sem global); AR não calcula outrate, então passamos 0.0/0
+            # >>> base de ROI per-channel (apenas custos reais de rebal; sem outrate/seed)
             roi_base_ppm, roi_src = pick_roi_base_ppm(
                 cid,
                 per_rebal_ppm=per_cost_ppm,
@@ -706,15 +701,15 @@ async def main():
                 state=state_af,
                 last_seed=seed_last,
                 now_ts=now_ts()
-        )
+            )
 
             # Price Gate
             price_ok, price_mot = price_gate_ok(local_ppm, remote_ppm, ar_max_cost)
 
-            # >>> PATCH: lucro com base per-channel (sem global)
+            # >>> lucro com base per-channel (sem global; e sem bloquear quando não há custo)
             prof_ok,  prof_mot  = profitable_noglobal(local_ppm, remote_ppm, roi_base_ppm)
 
-            # >>> PATCH: roi-cap com a mesma base per-channel
+            # >>> roi-cap com a mesma base per-channel (não bloqueia se base<=0)
             roi_ok, roi_mot = roi_cap_ok(
                 local_ppm=local_ppm,
                 seed_last=seed_last,
@@ -722,8 +717,7 @@ async def main():
                 cls=cls_eff,
                 baseline=baseline,
                 out_ratio=out_r
-        )
-
+            )
 
             # ---------- FILL-LOCK ----------
             fill_lock_active = False
@@ -744,7 +738,14 @@ async def main():
                         if hard_cost_fail or hard_price_fail:
                             fill_lock_active = False
                             reason = "custo_base_alto" if hard_cost_fail else "price_gate_reprovado"
-                            log_append({"type":"kill_switch_release", "cid": cid, "alias": alias, "reason": reason, "roi_base_ppm": int(roi_base_ppm or 0), "roi_src": roi_src})
+                            log_append({
+                                "type":"kill_switch_release",
+                                "cid": cid,
+                                "alias": alias,
+                                "reason": reason,
+                                "roi_base_ppm": int(roi_base_ppm or 0),
+                                "roi_src": roi_src
+                            })
                             price_mot = price_mot + " | 🧯 kill-switch liberou fill-lock"
                             prof_mot  = prof_mot  + " | 🧯 kill-switch liberou fill-lock"
                             roi_mot   = roi_mot   + " | 🧯 kill-switch liberou fill-lock"
@@ -866,7 +867,7 @@ async def main():
                     bits.append(f"🏷️{cls_eff} • 📈 base7d {baseline}")
                     if seed_last is not None:
                         bits.append(f"🌱 seed≈{int(seed_last)}ppm")
-                    # >>> PATCH: reportar base usada e sua origem
+                    # >>> reportar base usada e sua origem
                     bits.append(f"🧾 base={int(roi_base_ppm)}ppm [{roi_src}]")
                     if use_ch_cost:
                         bits.append(f"💸 rebal7d(canal)≈{int(ch_cost_raw)}ppm (vol≈{ch_val_sat:,}; cnt={ch_cnt})")
@@ -874,7 +875,6 @@ async def main():
                         bits.append(f"🌐 rebal7d(global)≈{int(global_cost_ppm)}ppm (info)")
                     else:
                         bits.append("🌐 rebal7d: sem amostra global")
-
 
                     mot = " | ".join(bits)
                     action_txt = ("🟢 ON" if payload.get("auto_rebalance", ar_current)
@@ -943,7 +943,10 @@ async def main():
                     if (desired_out_target == out_tgt) and (not fill_lock_active):
                         lock_tag = ""
 
-                    await update_channel(session, cid, {"ar_out_target": desired_out_target, "ar_in_target": in_tgt})
+                    await update_channel(session, {
+                        "ar_out_target": desired_out_target,
+                        "ar_in_target": in_tgt
+                    })
                     changes += 1
                     cnt_target += 1
                     bias_pp_dbg = get_bias_pp_from_state(state_af, cid, cls_eff)
@@ -995,8 +998,17 @@ async def main():
                 if out_r > max(low, religa_out_thresh):
                     reasons.append(f"r>{max(low, religa_out_thresh):.2f}")
                 if reasons:
-                    log_append({"type":"no_toggle","cid":cid,"alias":alias,"reasons":reasons,
-                                "out_ratio":round(out_r,4),"out_tgt":out_tgt,"religa":religa_out_thresh,"used_cost": roi_src, "cost_ppm": int(roi_base_ppm or 0)})
+                    log_append({
+                        "type":"no_toggle",
+                        "cid":cid,
+                        "alias":alias,
+                        "reasons":reasons,
+                        "out_ratio":round(out_r,4),
+                        "out_tgt":out_tgt,
+                        "religa":religa_out_thresh,
+                        "used_cost": roi_src,
+                        "cost_ppm": int(roi_base_ppm or 0)
+                    })
 
         # salvar STATE_PATH se houve troca (cooldown persistido)
         if changes > 0:
@@ -1014,4 +1026,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
