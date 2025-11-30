@@ -1,3 +1,4 @@
+0.3.22 - Melhoria Autofee - Novo Módulo de Inbound Fee (Desconto)
 0.3.21 - Melhoria Autofee e Trigger - Subida mais rápida Sink Lucrativo e Correção BUG
 0.3.20 - Melhoria Autofee - Pre versao com o DID_ASSISTED e novo Modo EXPLORER
 0.3.19 - Melhoria Ai Tuner - Afrouxar indicadores em Good Streak

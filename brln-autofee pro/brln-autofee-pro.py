@@ -198,8 +198,8 @@ NEW_INBOUND_NORMALIZE_ENABLE   = True
 NEW_INBOUND_GRACE_HOURS        = 48
 NEW_INBOUND_OUT_MAX            = 0.05
 NEW_INBOUND_REQUIRE_NO_FWDS    = True
-NEW_INBOUND_MIN_DIFF_FRAC      = 0.25
-NEW_INBOUND_MIN_DIFF_PPM       = 50
+NEW_INBOUND_MIN_DIFF_FRAC      = 0.10
+NEW_INBOUND_MIN_DIFF_PPM       = 20
 NEW_INBOUND_DOWN_STEPCAP_FRAC  = 0.15
 NEW_INBOUND_TAG                = "🌱new-inbound"
 
@@ -244,7 +244,7 @@ AMBOSS_CACHE_TTL_SEC      = 3*3600 # reaproveita respostas por 3h
 GLOBAL_NEG_LOCK_SOFTEN_ENABLE   = True
 SOFTEN_MIN_OUT_RATIO            = 0.45   # só suaviza se houver muita liquidez local
 SOFTEN_REQUIRE_POS_CHAN_MARGIN  = True   # só solta se margem 7d do canal >= 0
-SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.95   # pode cair até ~98% do out_ppm7d (ainda respeita PEG/FLOOR)
+SOFTEN_MAX_DROP_TO_PEG_FRAC     = 0.95   # pode cair até ~95% do out_ppm7d (ainda respeita PEG/FLOOR)
 
 # >>> NOVO: comportamento especial para SINK
 SINK_SKIP_SEED_CAP               = True   # não aplicar cap pelo seed em SINK
@@ -290,7 +290,24 @@ MIN_SOFT_CEILING = 100          # piso global de teto "suave" (antes era 800 fix
 SEED_CEILING_MULT = 1.5          # já existia como 1.5 no seu cálculo
 SEED_FLOOR_MULT   = 1.10         # garante coerência mínima com o seed
 P65_BOOST         = 1.15         # se tiver p65, dá um leve boost
-SINK_MIN_MARGIN = 200          # margem mínima em ppm para ativar o turbo sink lucrativo 
+SINK_MIN_MARGIN = 150          # margem mínima em ppm para ativar o turbo sink lucrativo
+
+# ========== INBOUND DISCOUNT (REBATE) ==========
+INBOUND_FEE_ENABLE              = True  # liga/desliga globalmente
+INBOUND_FEE_SINK_ONLY           = True   # só aplicar em canais classificados como sink
+INBOUND_FEE_PASSIVE_REBAL_MODE  = True   # False = comportamento antigo (mais conservador)
+INBOUND_FEE_MIN_FWDS_7D         = 5      # precisa ter uso mínimo (forward 7d)
+INBOUND_FEE_MIN_MARGIN_PPM      = 200    # margem 7d mínima para começar a dar rebate
+INBOUND_FEE_SHARE_OF_MARGIN     = 0.30   # % da margem em ppm que vira desconto (30%)
+INBOUND_FEE_MAX_FRAC_LOCAL      = 0.90   # desconto nunca passa de 90% da taxa local
+INBOUND_FEE_MIN_OVER_REBAL_FRAC = 1.002   # net_fee >= 1.002 * custo_rebal (protege o custo)
+INBOUND_FEE_PUSH_MIN_ABS_PPM    = 10     # só reenviar BOS se mudar pelo menos isso
+# Desconto especial para sinks MUITO drenados sem rebal 7d real
+INBOUND_FEE_DRAINED_NO_REBAL_ENABLE   = True    # liga/desliga esse modo
+INBOUND_FEE_DRAINED_OUT_RATIO_MAX     = 0.05    # considera "muito drenado" se outbound < 5%
+INBOUND_FEE_DRAINED_DISCOUNT_FRAC     = 0.70    # rebate = local_ppm * 70% (ajusta se quiser)
+INBOUND_FEE_OUT_RATIO_MAX            = 0.10    # out_ratio máximo para considerar canal "baixo" para inbound
+ 
 
 # Etiquetas
 TAG_SINK     = "🏷️sink"
@@ -808,11 +825,24 @@ def seed_with_guard(pubkey, cache, state, cid):
     return float(seed), float(raw_p65), (float(p95) if p95 is not None else None), flags
 
 # ========== BOS ==========
-def bos_set_fee_ppm(to_pubkey, ppm_value):
-    # envia SEMPRE inteiro em PPM pro bos
-    v = clamp_ppm(int(round(ppm_value)))
-    cmd = f'{BOS} fees --to {to_pubkey} --set-fee-rate {v}'
+def bos_set_fees(to_pubkey, out_ppm, inbound_discount_ppm=None):
+    """
+    Seta a fee de saída e, opcionalmente, o rebate de inbound (discount).
+    - Se inbound_discount_ppm for 0, limpamos o desconto (mandamos 0 para o BOS).
+    """
+    out_v = clamp_ppm(int(round(out_ppm)))
+    cmd = f'{BOS} fees --to {to_pubkey} --set-fee-rate {out_v}'
+    if inbound_discount_ppm is not None:
+        inb_v = max(0, int(round(inbound_discount_ppm)))
+        cmd += f' --set-inbound-rate-discount {inb_v}'
     run(cmd)
+
+
+def bos_set_fee_ppm(to_pubkey, ppm_value):
+    """
+    Backward-compat: mantém quem já chama só set-fee-rate.
+    """
+    bos_set_fees(to_pubkey, ppm_value, None)
 
 # ========== STATE ==========
 def get_state():
@@ -995,6 +1025,218 @@ def build_didactic_explanation(
 
     except Exception:
         return "ℹ️ explicação: ajuste baseado em liquidez, custo (rebal) e demanda observada."
+
+def compute_inbound_discount_ppm(
+    *,
+    class_label: str,
+    out_ratio: float,
+    fwd_count: int,
+    margin_ppm_7d: int,
+    price_ppm: int,
+    base_cost_for_margin: float,
+    rebal_floor_ppm: int,
+    discovery_hit: bool,
+    new_inbound: bool,
+    rebal_ppm_7d: int,
+    rebal_ppm_7d_real: int,  # NOVO: custo real de rebal 7d (sem fallback)
+):
+    """
+    Calcula o desconto de inbound em ppm (para --set-inbound-rate-discount).
+
+    Estratégia geral:
+      - Só roda se INBOUND_FEE_ENABLE = True.
+      - Por padrão só em sinks drenados e lucrativos (INBOUND_FEE_SINK_ONLY).
+      - Usa um custo de referência ("âncora") para o inbound:
+
+        • Em modo PASSIVE_REBAL:
+            - Se tiver rebal_ppm_7d > 0, usa ele como âncora principal
+              (ajustado por INBOUND_FEE_MIN_OVER_REBAL_FRAC).
+            - Se não tiver rebal_ppm_7d, cai para base_cost_for_margin.
+            ⇒ inbound_net_ppm fica colado no custo de rebal 7d.
+
+        • Em modo conservador:
+            - Usa base_cost_for_margin como âncora, ajustado pelo mesmo fator.
+            - Piso também considera rebal_floor_ppm.
+
+      - Gera um *discount* (rebate_ppm) tal que:
+            inbound_net_ppm = price_ppm - rebate_ppm
+
+    Modo conservador (INBOUND_FEE_PASSIVE_REBAL_MODE = False):
+      - Desconto é fração da margem (INBOUND_FEE_SHARE_OF_MARGIN).
+      - Piso de segurança leva em conta:
+            max(âncora_de_custo, rebal_floor_ppm)
+      - Limita pelo gap até esse piso e por INBOUND_FEE_MAX_FRAC_LOCAL.
+
+    Modo PASSIVE REBAL (INBOUND_FEE_PASSIVE_REBAL_MODE = True):
+      - Focado em usar inbound como "rebalance passivo".
+      - Se existir rebal_ppm_7d:
+            anchor_cost_ppm ≈ rebal_ppm_7d * INBOUND_FEE_MIN_OVER_REBAL_FRAC
+        (ou seja, inbound_net_ppm fica colado no custo de rebal 7d).
+      - Senão, cai para base_cost_for_margin como fallback.
+      - inbound_net_ppm é puxado o mais perto possível dessa âncora,
+        respeitando o cap de desconto relativo (INBOUND_FEE_MAX_FRAC_LOCAL).
+      - O guard-rail com rebal_floor_ppm é aplicado **apenas** no modo
+        conservador; no modo PASSIVE_REBAL, deixamos o inbound de fato
+        ficar abaixo do piso global de rebal para funcionar como rebalance passivo.
+
+    Retorna (discount_ppm:int, reason:str).
+    """
+    has_real_rebal_7d = (rebal_ppm_7d_real or 0) > 0
+
+    # identificador para o caso especial: sink MUITO drenado em modo passivo, sem rebal 7d real
+    is_passive_drained_no_rebal = (
+        INBOUND_FEE_PASSIVE_REBAL_MODE
+        and INBOUND_FEE_DRAINED_NO_REBAL_ENABLE
+        and class_label == "sink"
+        and out_ratio <= INBOUND_FEE_DRAINED_OUT_RATIO_MAX
+        and not has_real_rebal_7d
+    )
+
+    # 0) FEATURE GLOBAL
+    if not INBOUND_FEE_ENABLE:
+        return 0, "disabled"
+
+    # 1) Filtros de sanidade
+    if discovery_hit or new_inbound:
+        return 0, "discovery-or-new"
+
+    # Em geral exigimos fwds mínimos, EXCETO para o caso passivo drenado sem rebal real
+    if fwd_count < INBOUND_FEE_MIN_FWDS_7D and not is_passive_drained_no_rebal:
+        return 0, "few-fwds"
+
+    # normaliza rebal_ppm_7d
+    rebal_ppm_7d = int(rebal_ppm_7d or 0)
+
+    # precisa ter algum tipo de custo estimado: rebal_ppm_7d OU base_cost_for_margin
+    # (mas não exigimos isso para o modo passivo drenado sem rebal real,
+    #  que usa apenas price_ppm como referência)
+    if not is_passive_drained_no_rebal:
+        if rebal_ppm_7d <= 0 and (base_cost_for_margin or 0) <= 0:
+            return 0, "no-rebal-cost"
+
+    if INBOUND_FEE_SINK_ONLY and class_label != "sink":
+        return 0, "not-sink"
+
+    # drenado mesmo (pouco outbound) para inbound em geral (usa parâmetro específico)
+    if out_ratio > INBOUND_FEE_OUT_RATIO_MAX:
+        return 0, "not-drained"
+
+    # Caso especial: sink MUITO drenado, sem custo REAL de rebal 7d (rebalance passivo)
+    if is_passive_drained_no_rebal:
+        price_ppm = int(price_ppm or 0)
+        if price_ppm <= 0:
+            return 0, "no-price"
+
+        # Desconto bruto = fração da taxa local
+        raw_discount = int(round(price_ppm * INBOUND_FEE_DRAINED_DISCOUNT_FRAC))
+
+        # Ainda respeita o cap global de desconto relativo
+        max_discount_by_frac = int(round(price_ppm * INBOUND_FEE_MAX_FRAC_LOCAL))
+        rebate_ppm = min(raw_discount, max_discount_by_frac)
+
+        if rebate_ppm <= 0:
+            return 0, "drained-no-rebal-zero"
+
+        return int(rebate_ppm), "drained-no-rebal"
+
+
+    if margin_ppm_7d < INBOUND_FEE_MIN_MARGIN_PPM:
+        return 0, "low-margin"
+
+    price_ppm = int(price_ppm or 0)
+    if price_ppm <= 0:
+        return 0, "no-price"
+
+    # 2) Define a âncora de custo:
+
+    if INBOUND_FEE_PASSIVE_REBAL_MODE:
+        # MODO PASSIVE REBAL:
+        # 1ª preferência: custo REAL de rebal 7d (LNDg)
+        if has_real_rebal_7d:
+            anchor_cost_ppm = int(round(rebal_ppm_7d_real * INBOUND_FEE_MIN_OVER_REBAL_FRAC))
+        # 2ª preferência: anchor derivado (fallback já calculado fora)
+        elif rebal_ppm_7d > 0:
+            anchor_cost_ppm = int(round(rebal_ppm_7d * INBOUND_FEE_MIN_OVER_REBAL_FRAC))
+        # 3ª preferência: base_cost_for_margin (quando existir)
+        else:
+            anchor_cost_ppm = int(round(base_cost_for_margin * INBOUND_FEE_MIN_OVER_REBAL_FRAC))
+
+        min_safe_ppm = anchor_cost_ppm
+
+    else:
+        # MODO CONSERVADOR (comportamento antigo):
+        # Usa base_cost_for_margin como âncora, se existir,
+        # depois aplica o maior entre âncora e rebal_floor_ppm.
+        if (base_cost_for_margin or 0) > 0:
+            cost_anchor = int(round(base_cost_for_margin * INBOUND_FEE_MIN_OVER_REBAL_FRAC))
+        elif rebal_ppm_7d > 0:
+            cost_anchor = int(round(rebal_ppm_7d * INBOUND_FEE_MIN_OVER_REBAL_FRAC))
+        else:
+            cost_anchor = 0
+
+        min_safe_ppm = max(cost_anchor, int(rebal_floor_ppm or 0))
+
+    # "espaço" disponível acima do mínimo seguro (para desconto)
+    gap_ppm = max(0, price_ppm - min_safe_ppm)
+    if gap_ppm <= 0:
+        return 0, "no-gap"
+
+    # limite relativo ao preço local (ex.: nunca dar mais que X% de desconto)
+    max_discount_by_frac = int(round(price_ppm * INBOUND_FEE_MAX_FRAC_LOCAL))
+
+    # 3) Cálculo do desconto: modo PASSIVE REBAL vs conservador
+    if INBOUND_FEE_PASSIVE_REBAL_MODE:
+        # ===== MODO PASSIVE REBAL =====
+        # Objetivo: inbound_net_ppm ≈ âncora_de_custo (idealmente rebal_ppm_7d * fator).
+        #
+        # Respeitando o cap relativo:
+        #   min_net_by_frac = price_ppm - max_discount_by_frac
+        #
+        # Alvo de net:
+        #   target_net = max(min_safe_ppm, min_net_by_frac)
+        #
+        # Se o gap até min_safe_ppm couber dentro do cap relativo,
+        # inbound fica bem mais barato, colado no custo de rebal.
+        min_net_by_frac = price_ppm - max_discount_by_frac
+        target_net = max(min_safe_ppm, min_net_by_frac)
+
+        rebate_ppm = max(0, price_ppm - target_net)
+        mode_reason = "passive-rebal"
+    else:
+        # ===== MODO CONSERVADOR =====
+        # Desconto baseado na margem 7d (share da margem).
+        rebate_from_margin = max(
+            0,
+            int(round(margin_ppm_7d * INBOUND_FEE_SHARE_OF_MARGIN))
+        )
+
+        # Não passar do gap até min_safe_ppm
+        rebate_ppm = min(rebate_from_margin, gap_ppm)
+
+        # Nem do cap relativo ao preço local
+        rebate_ppm = min(rebate_ppm, max_discount_by_frac)
+
+        mode_reason = "margin-share"
+
+    # 4) Guard-rails finais
+
+    if rebate_ppm <= 0:
+        return 0, f"{mode_reason}-rebate-zero"
+
+    net_ppm = price_ppm - rebate_ppm
+
+    # No modo CONSERVADOR, ainda respeitamos rebal_floor_ppm.
+    # No PASSIVE_REBAL, deixamos o inbound de fato ficar abaixo desse piso
+    # global, porque a ideia é justamente ser mais agressivo.
+    if (not INBOUND_FEE_PASSIVE_REBAL_MODE) and rebal_floor_ppm and net_ppm < rebal_floor_ppm:
+        rebate_ppm = max(0, price_ppm - rebal_floor_ppm)
+        net_ppm = price_ppm - rebate_ppm
+
+    if rebate_ppm <= 0:
+        return 0, f"{mode_reason}-rebate-clamped"
+
+    return int(rebate_ppm), mode_reason
+
 
 def _get_explorer_state(st: dict, cid: str) -> dict:
     """Retorna subestado do explorer para o canal."""
@@ -1204,6 +1446,7 @@ def main(dry_run=False):
     shard_skips = 0
     excl_dry_up = excl_dry_down = excl_dry_kept = 0
     max_hits = 0  # << telemetria: canais que ficaram no MAX_PPM
+    inbound_changed = 0  # 👈 novo contador: qualquer mudança de inbound
 
     chan_status_cache = cache.get(OFFLINE_STATUS_CACHE_KEY, {})
 
@@ -1735,42 +1978,49 @@ def main(dry_run=False):
 
         can_lock_globally = bool(has_recent_rebal or has_recent_outrate)
 
-
-
         # NEW INBOUND: step cap maior só para reduzir
         if new_inbound and local_ppm > target:
             cap_frac = max(cap_frac, NEW_INBOUND_DOWN_STEPCAP_FRAC)
-            
+
         lock_skip_tag = None
+
         # === Travamento quando a operação 7d está negativa (com suavização opcional) ===
-        if neg_margin_global and can_lock_globally:
-            allow_soften = False
-            if GLOBAL_NEG_LOCK_SOFTEN_ENABLE:
-                # Canal saudável: muita liquidez local e margem 7d do canal >= 0 (se exigido)
-                chan_ok = (out_ratio >= SOFTEN_MIN_OUT_RATIO)
-                if SOFTEN_REQUIRE_POS_CHAN_MARGIN:
-                    chan_ok = chan_ok and (margin_ppm_7d >= 0)
-                if chan_ok and (not discovery_hit) and (not new_inbound):
-                    allow_soften = True
+        if neg_margin_global:
+            if can_lock_globally:
+                allow_soften = False
+                if GLOBAL_NEG_LOCK_SOFTEN_ENABLE:
+                    # Canal saudável: muita liquidez local e margem 7d do canal >= 0 (se exigido)
+                    chan_ok = (out_ratio >= SOFTEN_MIN_OUT_RATIO)
+                    if SOFTEN_REQUIRE_POS_CHAN_MARGIN:
+                        chan_ok = chan_ok and (margin_ppm_7d >= 0)
+                    if chan_ok and (not discovery_hit) and (not new_inbound):
+                        allow_soften = True
 
-            if (target < local_ppm) and (not discovery_hit) and (not new_inbound):
-                if allow_soften:
-                    # Permitir queda, mas limitada por PEG/FLOOR e step-cap
-                    # Se houver out_ppm_7d, não descer agressivamente abaixo dele
-                    if (out_ppm_7d or 0) > 0:
-                        peg_floor = int(round(out_ppm_7d * SOFTEN_MAX_DROP_TO_PEG_FRAC))
-                        target = max(target, peg_floor)
-                else:
-                    target = local_ppm  # mantém lock total
-                    global_neg_lock_applied = True
+                # 🔹 EXCEÇÃO: não aplicar hard lock em SINK lucrativo
+                if class_label == "sink" and margin_ppm_7d > SINK_MIN_MARGIN:
+                    # não faz nada aqui: o canal segue o fluxo normal, sem travar em local_ppm
+                    lock_skip_tag = "🔓 sink-lucrativo-global-neg"
+                    # opcional: reforça um step cap mínimo para evitar queda brusca
+                    cap_frac = max(cap_frac, STEP_CAP)
 
-            # Mais fôlego para subir quando o global está no vermelho
-            cap_frac = max(cap_frac, STEP_CAP + 0.05)
-            
-            # Diagnóstico: lock global "skipado" por falta de base por canal
-            
-            if neg_margin_global and (not can_lock_globally) and (target < local_ppm) and (not discovery_hit) and (not new_inbound):
-                lock_skip_tag = "🛡️lock-skip(no-chan-rebal)"
+                elif (target < local_ppm) and (not discovery_hit) and (not new_inbound):
+                    if allow_soften:
+                        # Permitir queda, mas limitada por PEG/FLOOR e step-cap
+                        # Se houver out_ppm_7d, não descer agressivamente abaixo dele
+                        if (out_ppm_7d or 0) > 0:
+                            peg_floor = int(round(out_ppm_7d * SOFTEN_MAX_DROP_TO_PEG_FRAC))
+                            target = max(target, peg_floor)
+                    else:
+                        target = local_ppm  # mantém lock total
+                        global_neg_lock_applied = True
+
+                # Mais fôlego para subir quando o global está no vermelho
+                cap_frac = max(cap_frac, STEP_CAP + 0.05)
+
+            else:
+                # Diagnóstico: lock global "skipado" por falta de base por canal
+                if (target < local_ppm) and (not discovery_hit) and (not new_inbound):
+                    lock_skip_tag = "🛡️lock-skip(no-chan-rebal)"
 
         # Extreme drain mode — acelera SUBIDAS
         STEP_MIN_STEP_PPM_UP = STEP_MIN_STEP_PPM
@@ -1879,6 +2129,10 @@ def main(dry_run=False):
         else:
             floor_ppm = MIN_PPM
             floor_src = "none"
+        
+        # Custo REAL de rebal 7d por canal (sem fallback),
+        # vindo direto do LNDg (rebal_cost_ppm_by_chan_use)
+        rebal_ppm7d_real = int(round(rebal_cost_ppm_by_chan_use.get(cid, 0) or 0))
 
         # --- Valor de rebal para exibição (7d) — agora que floor_src está definido ---
         if floor_src == "rebal7d":
@@ -2111,6 +2365,52 @@ def main(dry_run=False):
         status_tags = status_tags  # já montado lá em cima (🟢on/🔴off)
         all_tags = status_tags + class_tags + seed_tags + diag_tags
 
+        # --- Cálculo do inbound discount (rebate) ---
+        prev_inb_discount = int((state.get(cid, {}) or {}).get("last_inbound_discount_ppm", 0))
+
+        # Valor padrão: sem desconto
+        inbound_discount_ppm = 0
+        inbound_reason = "disabled"
+
+        if INBOUND_FEE_ENABLE:
+            
+
+            inbound_discount_ppm, inbound_reason = compute_inbound_discount_ppm(
+                class_label=class_label,
+                out_ratio=out_ratio,
+                fwd_count=fwd_count,
+                margin_ppm_7d=margin_ppm_7d,
+                price_ppm=final_ppm,
+                base_cost_for_margin=base_cost_for_margin,
+                rebal_floor_ppm=rebal_floor_ppm,
+                discovery_hit=bool(discovery_hit),
+                new_inbound=bool(new_inbound),
+                rebal_ppm_7d=int(rebal_ppm7d_val or 0),
+                rebal_ppm_7d_real=int(rebal_ppm7d_real or 0),
+            )
+
+            if inbound_discount_ppm > 0:
+                all_tags.append(f"💸inb{inbound_discount_ppm}")
+                if DEBUG_TAGS:
+                    all_tags.append(f"ⓘinb:{inbound_reason}")
+
+        # delta do inbound (para saber se vale a pena empurrar pro BOS)
+        inbound_delta = abs(inbound_discount_ppm - prev_inb_discount)
+        inbound_push_needed = (
+            INBOUND_FEE_ENABLE and
+            inbound_delta >= INBOUND_FEE_PUSH_MIN_ABS_PPM
+        )
+
+        # net fee de inbound (somente para log)
+        if INBOUND_FEE_ENABLE and inbound_discount_ppm > 0:
+            net_inbound_ppm = max(final_ppm - inbound_discount_ppm, 0)
+        else:
+            net_inbound_ppm = final_ppm
+        # String amigável para log sobre inbound discount
+        if INBOUND_FEE_ENABLE and inbound_discount_ppm > 0:
+              inb_str = f" | inb {prev_inb_discount}→{inbound_discount_ppm}ppm (net≈{net_inbound_ppm})"
+        else:
+            inb_str = ""
 
         # ====== MÍNIMO REAL: sanear local < MIN_PPM ======
         # Fazemos antes do gate de microupdate/cooldown.
@@ -2145,7 +2445,9 @@ def main(dry_run=False):
         # se estamos corrigindo MIN_PPM, força push
         if local_ppm < MIN_PPM and new_ppm >= MIN_PPM:
             will_push = True
-
+        if inbound_push_needed:
+            will_push = True
+            
         # === COOLDOWN / HISTERÉSE ===
         st_prev  = state.get(cid, {})
         last_ts  = st_prev.get("last_ts", 0)
@@ -2255,10 +2557,15 @@ def main(dry_run=False):
             st_for_save["class_conf"]  = float(class_conf)
             state[cid] = st_for_save
 
-        if new_ppm != local_ppm and will_push:
+        if (new_ppm != local_ppm or inbound_push_needed) and will_push:
             delta = new_ppm - local_ppm
-            pct = (abs(delta) / local_ppm * 100.0) if local_ppm > 0 else 0.0
-            dstr = f"{'+' if delta>0 else ''}{delta} ({pct:.1f}%)"
+            if new_ppm != local_ppm and local_ppm > 0:
+                pct = (abs(delta) / local_ppm * 100.0)
+                dstr = f"{'+' if delta>0 else ''}{delta} ({pct:.1f}%)"
+            else:
+                # nenhuma mudança de outbound; alteração só de inbound
+                dstr = "0 (0.0%) [inb only]"
+
 
             if act_dry:
                 if is_excluded and not EXCL_DRY_VERBOSE:
@@ -2273,8 +2580,20 @@ def main(dry_run=False):
                     action = f"DRY set {local_ppm}→{new_ppm} ppm {dstr}"
                     new_dir = dir_for_emoji
                     excl_note = " 🚷excl-dry" if is_excluded else ""
+                    # 👉 conta mudança de inbound (qualquer alteração, mesmo com outbound)
+                    try:
+                        prev_inb = int(prev_inb_discount)
+                    except Exception:
+                        prev_inb = 0
+                    try:
+                        cur_inb = int(inbound_discount_ppm) if inbound_discount_ppm is not None else 0
+                    except Exception:
+                        cur_inb = 0
+
+                    if INBOUND_FEE_ENABLE and cur_inb != prev_inb:
+                        inbound_changed += 1
                     report.append(
-                        f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
+                        f"✅{emo} {alias}:{excl_note} {action} {inb_str} | alvo {target} | out_ratio {out_ratio:.2f} | "
                         f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                         f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                         + (
@@ -2306,16 +2625,34 @@ def main(dry_run=False):
                         if new_ppm > local_ppm: excl_dry_up += 1
                         else: excl_dry_down += 1
                     else:
-                        # >>> NOVO: contabiliza no resumo também em dry-run
-                        if new_ppm > local_ppm: changed_up += 1
-                        else: changed_down += 1
+                        if new_ppm > local_ppm:
+                            changed_up += 1
+                        elif new_ppm < local_ppm:
+                            changed_down += 1
+                        else:
+                            kept += 1   # outbound igual, mudamos só inbound
             else:
                 try:
                     if pubkey:
-                        bos_set_fee_ppm(pubkey, new_ppm)
+                        if INBOUND_FEE_ENABLE:
+                            bos_set_fees(pubkey, final_ppm, inbound_discount_ppm)
+                        else:
+                            # comportamento antigo: só setar out_ppm
+                            bos_set_fees(pubkey, final_ppm, None)
                         action = f"set {local_ppm}→{new_ppm} ppm {dstr}"
                         new_dir = dir_for_emoji
+                        # 👉 conta mudança de inbound (qualquer alteração, mesmo com outbound)
+                        try:
+                            prev_inb = int(prev_inb_discount)
+                        except Exception:
+                            prev_inb = 0
+                        try:
+                            cur_inb = int(inbound_discount_ppm) if inbound_discount_ppm is not None else 0
+                        except Exception:
+                            cur_inb = 0
 
+                        if INBOUND_FEE_ENABLE and cur_inb != prev_inb:
+                            inbound_changed += 1
                         # baseline EMA (70/30) se houver amostra >0
                         st = state.get(cid, {}).copy()
                         # Explorer: contabiliza round de queda aplicada
@@ -2330,7 +2667,8 @@ def main(dry_run=False):
                                 new_base = fwd_count
                         else:
                             new_base = old_base
-
+                        # grava o último desconto de inbound aplicado (ou zero se desativado)
+                        st["last_inbound_discount_ppm"] = int(inbound_discount_ppm if INBOUND_FEE_ENABLE else 0)
                         st.update({
                             "last_ppm": new_ppm,
                             "last_dir": new_dir,
@@ -2354,7 +2692,7 @@ def main(dry_run=False):
 
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
-                    f"✅{emo} {alias}:{excl_note} {action} | alvo {target} | out_ratio {out_ratio:.2f} | "
+                    f"✅{emo} {alias}:{excl_note} {action} {inb_str} | alvo {target} | out_ratio {out_ratio:.2f} | "
                     f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                     f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                     + (
@@ -2385,8 +2723,12 @@ def main(dry_run=False):
                     if new_ppm > local_ppm: excl_dry_up += 1
                     else: excl_dry_down += 1
                 else:
-                    if new_ppm > local_ppm: changed_up += 1
-                    else: changed_down += 1
+                    if new_ppm > local_ppm:
+                        changed_up += 1
+                    elif new_ppm < local_ppm:
+                        changed_down += 1
+                    else:
+                        kept += 1   # outbound igual, mudamos só inbound
 
         else:
             # mantém (ou micro-update/cooldown segurou)
@@ -2413,7 +2755,7 @@ def main(dry_run=False):
             else:
                 excl_note = " 🚷excl-dry" if is_excluded else ""
                 report.append(
-                    f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm | alvo {target} | out_ratio {out_ratio:.2f} | "
+                    f"🫤⏸️ {alias}:{excl_note} mantém {local_ppm} ppm {inb_str} | alvo {target} | out_ratio {out_ratio:.2f} | "
                     f"out_ppm7d≈{int(out_ppm_7d)} | rebal_ppm7d≈{rebal_ppm7d_str} | seed≈{seed_note} | floor≥{floor_ppm}{floor_src_tag} | marg≈{margin_ppm_7d} | "
                     f"rev_share≈{rev_share:.2f} | {' '.join(all_tags)} | {fee_lr_str}"   # NEW
                         + (
@@ -2451,6 +2793,9 @@ def main(dry_run=False):
         summary += f" | shard_skips {shard_skips}"
     if (excl_dry_up + excl_dry_down + excl_dry_kept) > 0:
         summary += f" | excl_dry up {excl_dry_up} | down {excl_dry_down} | flat {excl_dry_kept}"
+    # 👉 adiciona o contador de mudanças de inbound
+    if inbound_changed > 0:
+        summary += f" | inb_changed {inbound_changed}"
     report.insert(1, summary)
     
     # Telemetria: quantos SCIDs de custo por canal batem com canais abertos
