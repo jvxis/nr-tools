@@ -293,7 +293,7 @@ P65_BOOST         = 1.15         # se tiver p65, dá um leve boost
 SINK_MIN_MARGIN = 150          # margem mínima em ppm para ativar o turbo sink lucrativo
 
 # ========== INBOUND DISCOUNT (REBATE) ==========
-INBOUND_FEE_ENABLE              = True  # liga/desliga globalmente
+INBOUND_FEE_ENABLE              = False  # liga/desliga globalmente
 INBOUND_FEE_SINK_ONLY           = True   # só aplicar em canais classificados como sink
 INBOUND_FEE_PASSIVE_REBAL_MODE  = True   # False = comportamento antigo (mais conservador)
 INBOUND_FEE_MIN_FWDS_7D         = 5      # precisa ter uso mínimo (forward 7d)
